@@ -62,6 +62,34 @@ pub fn decode_line(raw: &[u8]) -> String {
     }
 }
 
+/// Upper bound for copying to the clipboard; larger ranges should be downloaded.
+pub const MAX_COPY_LINES: usize = 200_000;
+
+/// Text of visible lines `[start, end]` (inclusive) exactly as exported:
+/// time per `fmt`, container tag when several containers are shown.
+pub fn render_range(
+    store: &store::LogStore,
+    start: usize,
+    end: usize,
+    fmt: &TimeFormatter,
+    containers: &[String],
+) -> (String, usize) {
+    let prefix = containers.len() > 1;
+    let mut out = String::new();
+    let lines = store.window(start, end.saturating_add(1));
+    for (_, line) in &lines {
+        let container = prefix
+            .then(|| containers.get(line.container as usize).map(String::as_str))
+            .flatten();
+        format_export_line(&mut out, fmt, line, container);
+    }
+    // No trailing newline: pasting a single line should not add one.
+    if out.ends_with('\n') {
+        out.pop();
+    }
+    (out, lines.len())
+}
+
 /// One exported line: `[time ][[container] ]text\n`.
 pub fn format_export_line(
     out: &mut String,
@@ -114,6 +142,33 @@ mod tests {
         assert!(out[0].ts < out[1].ts);
         assert_eq!(out[2].ts, NO_TS);
         assert!(out.iter().all(|l| l.container == 3));
+    }
+
+    #[test]
+    fn render_range_is_inclusive_and_tags_containers() {
+        let mut s = store::LogStore::default();
+        for (i, c) in [(0, 0u16), (1, 1), (2, 0), (3, 1)] {
+            s.push(LogLine {
+                ts: NO_TS,
+                container: c,
+                text: format!("l{i}").into(),
+            });
+        }
+        let fmt = TimeFormatter::new(TimeMode::None);
+        let two = vec!["app".to_string(), "db".to_string()];
+        assert_eq!(
+            render_range(&s, 1, 2, &fmt, &two),
+            ("[db] l1\n[app] l2".to_string(), 2)
+        );
+        assert_eq!(
+            render_range(&s, 3, 3, &fmt, &two[..1]),
+            ("l3".to_string(), 1)
+        );
+        assert_eq!(
+            render_range(&s, 2, 99, &fmt, &two[..1]).1,
+            2,
+            "clamped to the end"
+        );
     }
 
     #[test]

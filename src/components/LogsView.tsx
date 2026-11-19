@@ -97,6 +97,9 @@ export function LogsView(props: LogsViewProps) {
   const [total, setTotal] = createSignal(0);
   const [revision, setRevision] = createSignal(0);
   const [showDownload, setShowDownload] = createSignal(false);
+  /** Range of visible line indices selected via the gutter / ⌘A. */
+  const [lineSel, setLineSel] = createSignal<{ anchor: number; focus: number } | null>(null);
+  const [copyNote, setCopyNote] = createSignal<{ ok: boolean; text: string } | null>(null);
 
   createEffect(() => savePrefs({ timeMode: timeMode(), wrap: wrap(), lineNumbers: lineNumbers(), history: history() }));
 
@@ -161,6 +164,7 @@ export function LogsView(props: LogsViewProps) {
       let disposed = false;
       appliedQuery = null;
       batch(() => {
+        setLineSel(null);
         setSessionId(null);
         setStatus(null);
         setOpenError(null);
@@ -213,6 +217,7 @@ export function LogsView(props: LogsViewProps) {
       const result = await api.setLogQuery(id, q);
       appliedQuery = q;
       batch(() => {
+        setLineSel(null);
         setQueryError(null);
         setCurrent(null);
         setTotal(result.visible);
@@ -294,12 +299,119 @@ export function LogsView(props: LogsViewProps) {
     if (total() > 0) virtualizer.scrollToIndex(total() - 1, { align: "end" });
   }
 
+  const selRange = () => {
+    const sel = lineSel();
+    return sel ? { start: Math.min(sel.anchor, sel.focus), end: Math.max(sel.anchor, sel.focus) } : null;
+  };
+  const inLineSel = (index: number) => {
+    const r = selRange();
+    return !!r && index >= r.start && index <= r.end;
+  };
+
+  let noteTimer: number | undefined;
+  onCleanup(() => window.clearTimeout(noteTimer));
+  function note(ok: boolean, text: string) {
+    setCopyNote({ ok, text });
+    window.clearTimeout(noteTimer);
+    noteTimer = window.setTimeout(() => setCopyNote(null), 3000);
+  }
+
+  async function copyRange(start: number, end: number) {
+    const id = sessionId();
+    if (id === null) return;
+    try {
+      const r = await api.copyLogLines(id, start, end, timeMode());
+      note(true, `Copied ${r.lines.toLocaleString()} ${r.lines === 1 ? "line" : "lines"}`);
+    } catch (e) {
+      note(false, toAppError(e).message);
+    }
+  }
+
+  const rowOf = (node: Node | null) =>
+    (node instanceof Element ? node : node?.parentElement)?.closest<HTMLElement>("[data-index]") ?? null;
+  const textPartOf = (node: Node | null) =>
+    (node instanceof Element ? node : node?.parentElement)?.closest<HTMLElement>("[data-part=text]") ?? null;
+
+  /**
+   * Decides how a copy request is served. Text selected inside one line's
+   * message is copied natively; anything spanning lines (or time/container
+   * columns) is rendered by the backend from the stored lines, so the
+   * clipboard gets clean `time [container] text` lines.
+   */
+  function handleCopy(): boolean {
+    if (document.activeElement instanceof HTMLInputElement) return false;
+    const sel = window.getSelection();
+    const hasNative = !!sel && !sel.isCollapsed && !!scrollEl?.contains(sel.anchorNode);
+    if (hasNative) {
+      const a = rowOf(sel!.anchorNode);
+      const f = rowOf(sel!.focusNode);
+      if (!a || !f) return false;
+      const sameText = textPartOf(sel!.anchorNode) !== null && textPartOf(sel!.anchorNode) === textPartOf(sel!.focusNode);
+      if (sameText) return false;
+      void copyRange(Number(a.dataset.index), Number(f.dataset.index));
+      return true;
+    }
+    const r = selRange();
+    if (r) {
+      void copyRange(r.start, r.end);
+      return true;
+    }
+    return false;
+  }
+
+  function onCopy(e: ClipboardEvent) {
+    if (handleCopy()) e.preventDefault();
+  }
+
+  function onGutterMouseDown(e: MouseEvent, index: number) {
+    e.preventDefault();
+    window.getSelection()?.removeAllRanges();
+    const sel = lineSel();
+    if (e.shiftKey && sel) setLineSel({ anchor: sel.anchor, focus: index });
+    else if (sel && sel.anchor === index && sel.focus === index) setLineSel(null);
+    else setLineSel({ anchor: index, focus: index });
+    pauseFollow();
+  }
+
+  function onRowMouseDown(e: MouseEvent, index: number) {
+    const sel = lineSel();
+    if (e.shiftKey && sel) {
+      e.preventDefault();
+      window.getSelection()?.removeAllRanges();
+      setLineSel({ anchor: sel.anchor, focus: index });
+    } else if (sel && !e.shiftKey) {
+      setLineSel(null);
+    }
+  }
+
+  // Reading a selection while lines stream in: stop auto-scrolling so the
+  // selected text stays put.
+  const onSelectionChange = () => {
+    const sel = window.getSelection();
+    if (sel && !sel.isCollapsed && scrollEl?.contains(sel.anchorNode)) pauseFollow();
+  };
+  document.addEventListener("selectionchange", onSelectionChange);
+  onCleanup(() => document.removeEventListener("selectionchange", onSelectionChange));
+
   function onKeyDown(e: KeyboardEvent) {
     const mod = e.metaKey || e.ctrlKey;
-    if (mod && e.key.toLowerCase() === "f") {
+    const key = e.key.toLowerCase();
+    const inInput = e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement;
+    if (mod && key === "f") {
       e.preventDefault();
       searchInput?.focus();
       searchInput?.select();
+    } else if (mod && key === "c" && !inInput) {
+      if (handleCopy()) e.preventDefault();
+    } else if (mod && key === "a" && !inInput && total() > 0) {
+      e.preventDefault();
+      window.getSelection()?.removeAllRanges();
+      setLineSel({ anchor: 0, focus: total() - 1 });
+      pauseFollow();
+    } else if (e.key === "Escape" && lineSel() && !inInput) {
+      // Consumed here: must not also close the detail panel.
+      e.stopPropagation();
+      setLineSel(null);
     } else if (mod && e.key === "ArrowDown") {
       e.preventDefault();
       jumpToEnd();
@@ -324,7 +436,7 @@ export function LogsView(props: LogsViewProps) {
   const filtering = () => queryMode() === "filter" && !!queryText();
 
   return (
-    <div class="flex h-full flex-col" onKeyDown={onKeyDown}>
+    <div class="flex h-full flex-col" onKeyDown={onKeyDown} onCopy={onCopy}>
       {/* Row 1: what to stream and how to show it */}
       <div class="flex flex-wrap items-center gap-2 border-b border-line px-2 py-1.5 text-[12px]">
         <Show when={props.containers.length > 1}>
@@ -414,7 +526,8 @@ export function LogsView(props: LogsViewProps) {
             if (e.key === "Enter") {
               e.preventDefault();
               void find(!e.shiftKey);
-            } else if (e.key === "Escape") {
+            } else if (e.key === "Escape" && queryText()) {
+              e.stopPropagation();
               setQueryText("");
             }
           }}
@@ -472,6 +585,29 @@ export function LogsView(props: LogsViewProps) {
         )}
       </Show>
 
+      <Show when={selRange() || copyNote()}>
+        <div class="flex items-center gap-3 border-b border-line bg-panel px-2 py-1 text-[12px]" aria-live="polite">
+          <Show when={selRange()}>
+            {(r) => (
+              <>
+                <span>
+                  {(r().end - r().start + 1).toLocaleString()} {r().end === r().start ? "line" : "lines"} selected
+                </span>
+                <button class="rounded border border-line px-2 py-0.5 hover:bg-hover" onClick={() => void copyRange(r().start, r().end)}>
+                  Copy (⌘C)
+                </button>
+                <button class="rounded px-2 py-0.5 text-muted hover:bg-hover hover:text-fg" onClick={() => setLineSel(null)}>
+                  Clear (Esc)
+                </button>
+              </>
+            )}
+          </Show>
+          <Show when={copyNote()}>
+            {(n) => <span classList={{ "text-ok": n().ok, "text-error": !n().ok }}>{n().text}</span>}
+          </Show>
+        </div>
+      </Show>
+
       <div class="relative min-h-0 flex-1">
         <div
           ref={scrollEl}
@@ -490,7 +626,10 @@ export function LogsView(props: LogsViewProps) {
           >
             <For each={virtualizer.getVirtualItems()}>
               {(item) => {
-                const l = createMemo(() => lineAt(item.index));
+                // Same line, same content → no DOM update, so a text selection survives refetches.
+                const l = createMemo(() => lineAt(item.index), undefined, {
+                  equals: (a, b) => a === b || (!!a && !!b && a.n === b.n && a.ts === b.ts && a.c === b.c && a.text === b.text),
+                });
                 let rowEl: HTMLDivElement | undefined;
                 // Wrapped rows have variable height: measure after content changes.
                 createEffect(
@@ -504,7 +643,13 @@ export function LogsView(props: LogsViewProps) {
                     data-line={l()?.n}
                     ref={rowEl}
                     class="absolute left-0 top-0 flex px-2"
-                    classList={{ "w-full": wrap(), "min-w-full": !wrap(), "bg-selected": current()?.index === item.index }}
+                    classList={{
+                      "w-full": wrap(),
+                      "min-w-full": !wrap(),
+                      "bg-selected": current()?.index === item.index || inLineSel(item.index),
+                    }}
+                    aria-selected={inLineSel(item.index) || undefined}
+                    onMouseDown={(e) => onRowMouseDown(e, item.index)}
                     style={{
                       transform: `translateY(${item.start}px)`,
                       "min-height": `${LINE_HEIGHT}px`,
@@ -515,7 +660,16 @@ export function LogsView(props: LogsViewProps) {
                       {(ln) => (
                         <>
                           <Show when={lineNumbers()}>
-                            <span class="w-[8ch] shrink-0 select-none pr-3 text-right text-muted/70">{ln().n}</span>
+                            <span
+                              class="w-[8ch] shrink-0 cursor-pointer select-none pr-3 text-right text-muted/70 hover:text-fg"
+                              title="Click to select the line, Shift+click to select a range, ⌘C to copy"
+                              onMouseDown={(e) => {
+                                e.stopPropagation();
+                                onGutterMouseDown(e, item.index);
+                              }}
+                            >
+                              {ln().n}
+                            </span>
                           </Show>
                           <Show when={ln().ts}>
                             <span class="shrink-0 pr-3 text-muted">{ln().ts}</span>
@@ -525,7 +679,7 @@ export function LogsView(props: LogsViewProps) {
                               {containersInView()[ln().c]}
                             </span>
                           </Show>
-                          <span classList={{ "min-w-0 whitespace-pre-wrap break-all": wrap(), "whitespace-pre": !wrap() }}>
+                          <span data-part="text" classList={{ "min-w-0 whitespace-pre-wrap break-all": wrap(), "whitespace-pre": !wrap() }}>
                             <For each={segmentLine(ln().text, highlight())}>
                               {(seg) => (
                                 <span class={seg.cls} style={{ color: seg.color, "background-color": seg.background }}>

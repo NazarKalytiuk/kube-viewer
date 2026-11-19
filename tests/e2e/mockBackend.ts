@@ -235,6 +235,11 @@ export function installMockBackend(options: MockOptions) {
       send(onEvent, { type: "done", path: request.path, lines: total, bytes: total * 40 });
       return id;
     },
+    copy_log_lines: ({ id, start, end }) => {
+      const s = logSessions.get(id)!;
+      const v = visibleLines(s).slice(Math.min(start, end), Math.max(start, end) + 1);
+      return { lines: v.length, bytes: v.reduce((n, x) => n + x.line.text.length + 1, 0) };
+    },
     save_loaded_logs: ({ id, path }) => {
       const s = logSessions.get(id)!;
       const n = visibleLines(s).length;

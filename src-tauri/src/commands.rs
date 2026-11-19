@@ -380,6 +380,53 @@ pub fn find_log_match(
         }))
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CopyResult {
+    lines: usize,
+    bytes: usize,
+}
+
+/// Copies visible log lines `[start, end]` to the system clipboard. Done in
+/// Rust so ranges far beyond what the virtualized list renders work, and the
+/// text matches the export format exactly.
+#[tauri::command]
+pub fn copy_log_lines(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    id: u64,
+    start: usize,
+    end: usize,
+    time_mode: TimeMode,
+) -> AppResult<CopyResult> {
+    use tauri_plugin_clipboard_manager::ClipboardExt;
+
+    let (start, end) = (start.min(end), start.max(end));
+    if end - start >= crate::logs::MAX_COPY_LINES {
+        return Err(AppError::InvalidRequest(format!(
+            "{} lines are too many for the clipboard (max {}). Use Download instead.",
+            end - start + 1,
+            crate::logs::MAX_COPY_LINES
+        )));
+    }
+    let LogSession { store, containers } = log_session(&state, id)?;
+    let (text, lines) = {
+        let store = store.lock().expect("log store poisoned");
+        crate::logs::render_range(
+            &store,
+            start,
+            end,
+            &TimeFormatter::new(time_mode),
+            &containers,
+        )
+    };
+    let bytes = text.len();
+    app.clipboard()
+        .write_text(text)
+        .map_err(|e| AppError::Internal(format!("clipboard: {e}")))?;
+    Ok(CopyResult { lines, bytes })
+}
+
 #[tauri::command]
 pub async fn save_loaded_logs(
     state: State<'_, AppState>,

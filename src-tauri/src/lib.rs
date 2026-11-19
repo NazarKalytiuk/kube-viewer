@@ -24,6 +24,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .manage(commands::AppState::default())
         .invoke_handler(tauri::generate_handler![
             commands::resource_kinds,
@@ -40,6 +41,7 @@ pub fn run() {
             commands::get_log_lines,
             commands::find_log_match,
             commands::save_loaded_logs,
+            commands::copy_log_lines,
             commands::download_logs,
             commands::default_log_path,
             commands::close_subscription,

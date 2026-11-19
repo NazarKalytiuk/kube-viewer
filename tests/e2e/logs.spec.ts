@@ -109,3 +109,68 @@ test("expands the panel to full width and back, keeping the table alive", async 
   await expect(page.getByRole("grid")).toBeVisible();
   await expect(page.locator('[role="row"][aria-rowindex]').first()).toContainText("pod-000000");
 });
+
+const copyCalls = (page: Page) =>
+  page.evaluate(() => (window as any).__KV_MOCK__.calls.filter((c: any) => c.cmd === "copy_log_lines").map((c: any) => c.args));
+
+async function dragSelect(page: Page, fromLine: number, toLine: number) {
+  const a = await page.locator(`[data-line="${fromLine}"] [data-part=text]`).boundingBox();
+  const b = await page.locator(`[data-line="${toLine}"] [data-part=text]`).boundingBox();
+  await page.mouse.move(a!.x + 5, a!.y + 9);
+  await page.mouse.down();
+  await page.mouse.move(b!.x + 60, b!.y + 9, { steps: 6 });
+  await page.mouse.up();
+}
+
+test("copying a multi-line selection is served by the backend as clean lines", async ({ page }) => {
+  await dragSelect(page, 49990, 49996);
+  await page.keyboard.press("Meta+c");
+  await expect(page.getByText("Copied 7 lines")).toBeVisible();
+  expect(await copyCalls(page)).toEqual([expect.objectContaining({ start: 49989, end: 49995, timeMode: "local" })]);
+});
+
+test("a selection survives live updates and pauses following", async ({ page }) => {
+  await dragSelect(page, 49990, 49996);
+  const before = await page.evaluate(() => window.getSelection()!.toString());
+  expect(before).toContain("app line 49990");
+  await page.evaluate(() => (window as any).__KV_MOCK__.appendLogs(5));
+  await expect(page.getByRole("button", { name: "↓ 5 new lines" })).toBeVisible();
+  expect(await page.evaluate(() => window.getSelection()!.toString())).toBe(before);
+});
+
+test("gutter range selection reaches far beyond the screen; ⌘A selects everything", async ({ page }) => {
+  await page.locator('[data-line="50000"]').getByTitle(/Click to select the line/).click();
+  await expect(page.getByText("1 line selected")).toBeVisible();
+  await page.getByLabel("Log lines").focus();
+  await page.keyboard.press("Meta+ArrowUp");
+  await page.locator('[data-line="1"]').getByTitle(/Click to select the line/).click({ modifiers: ["Shift"] });
+  await expect(page.getByText("50,000 lines selected")).toBeVisible();
+  await page.keyboard.press("Meta+c");
+  await expect(page.getByText("Copied 50,000 lines")).toBeVisible();
+  expect((await copyCalls(page)).at(-1)).toMatchObject({ start: 0, end: 49999 });
+
+  await page.keyboard.press("Escape");
+  await expect(page.getByText(/lines? selected/)).toHaveCount(0);
+  await page.getByLabel("Log lines").focus();
+  await page.keyboard.press("Meta+a");
+  await expect(page.getByText("50,000 lines selected")).toBeVisible();
+});
+
+test("a selection inside one message uses the native clipboard", async ({ page }) => {
+  await page.locator('[data-line="49995"] [data-part=text]').dblclick();
+  expect(await page.evaluate(() => window.getSelection()!.toString())).not.toBe("");
+  await page.keyboard.press("Meta+c");
+  await page.waitForTimeout(200);
+  expect(await copyCalls(page)).toEqual([]);
+});
+
+test("Escape clears search or line selection without closing the panel", async ({ page }) => {
+  const search = page.getByLabel("Search logs");
+  await search.fill("error");
+  await search.press("Escape");
+  await expect(search).toHaveValue("");
+  await expect(page.getByRole("tab", { name: "logs" })).toBeVisible();
+  // With nothing to clear, Escape still closes the panel.
+  await search.press("Escape");
+  await expect(page.getByRole("tab", { name: "logs" })).toHaveCount(0);
+});

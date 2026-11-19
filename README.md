@@ -25,7 +25,12 @@ It is built to stay smooth on very large clusters: 100k-object views load in abo
   - **Live follow:** resumes after container restarts and dropped connections with no gaps or duplicates (resumes from the last timestamp). Init containers and finished pods stop cleanly.
   - **Search:** **Find** (highlight, ↑/↓, Enter / ⇧Enter, "3 / 120") or **Filter** (matching lines only); regex and match-case options; ⌘F.
   - **Reading:** ANSI colors, ERROR/WARN highlighting, line numbers, wrap toggle.
-  - **Auto-scroll:** pauses when you scroll up; a "↓ N new lines" pill brings you back.
+  - **Auto-scroll:** pauses when you scroll up or select text; a "↓ N new lines" pill brings you back.
+  - **Copy:**
+    - Text selected inside one message uses the native clipboard.
+    - A selection spanning lines is copied by the backend as clean `time [container] text` lines.
+    - Click a line number to select a line, Shift+click to extend to any distance (even off-screen), ⌘A selects all lines (respecting the filter); copy with ⌘C, up to 200k lines.
+    - Selections survive live updates.
   - **Download:**
     - *Full log from cluster* streams straight to disk (constant memory, merged by time across containers, progress and cancel).
     - *Loaded lines* saves exactly what is shown, filter included.

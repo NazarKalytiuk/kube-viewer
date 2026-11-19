@@ -104,6 +104,9 @@ export const api = {
   findLogMatch: (id: number, from: number | null, forward: boolean) =>
     invoke<FindResult | null>("find_log_match", { id, from, forward }),
 
+  copyLogLines: (id: number, start: number, end: number, timeMode: TimeMode) =>
+    invoke<{ lines: number; bytes: number }>("copy_log_lines", { id, start, end, timeMode }),
+
   saveLoadedLogs: (id: number, path: string, timeMode: TimeMode, containerPrefix: boolean) =>
     invoke<SaveResult>("save_loaded_logs", { id, path, timeMode, containerPrefix }),
 
