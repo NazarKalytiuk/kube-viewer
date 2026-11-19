@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Main window: core IPC only. All cluster access goes through typed app commands.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

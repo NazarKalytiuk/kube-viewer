@@ -1,0 +1,108 @@
+@import "tailwindcss";
+
+@theme inline {
+  --color-canvas: var(--kv-canvas);
+  --color-panel: var(--kv-panel);
+  --color-raised: var(--kv-raised);
+  --color-hover: var(--kv-hover);
+  --color-line: var(--kv-line);
+  --color-fg: var(--kv-fg);
+  --color-muted: var(--kv-muted);
+  --color-accent: var(--kv-accent);
+  --color-accent-fg: var(--kv-accent-fg);
+  --color-selected: var(--kv-selected);
+  --color-ok: var(--kv-ok);
+  --color-warn: var(--kv-warn);
+  --color-error: var(--kv-error);
+  --color-error-bg: var(--kv-error-bg);
+  --font-sans: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+}
+
+:root {
+  color-scheme: light;
+  --kv-canvas: #ffffff;
+  --kv-panel: #f6f7f9;
+  --kv-raised: #eef0f3;
+  --kv-hover: #f1f4f8;
+  --kv-line: #e2e5ea;
+  --kv-fg: #1d2330;
+  --kv-muted: #6b7383;
+  --kv-accent: #2563eb;
+  --kv-accent-fg: #ffffff;
+  --kv-selected: #dbe7fd;
+  --kv-ok: #15803d;
+  --kv-warn: #b45309;
+  --kv-error: #c62828;
+  --kv-error-bg: #fdecec;
+  --kv-syn-key: #1d4ed8;
+  --kv-syn-string: #0f766e;
+  --kv-syn-number: #9333ea;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --kv-canvas: #15171c;
+    --kv-panel: #1b1e24;
+    --kv-raised: #232730;
+    --kv-hover: #1f232b;
+    --kv-line: #2c313b;
+    --kv-fg: #e3e6eb;
+    --kv-muted: #8b93a3;
+    --kv-accent: #5b8def;
+    --kv-accent-fg: #0b1020;
+    --kv-selected: #24365a;
+    --kv-ok: #4ade80;
+    --kv-warn: #fbbf24;
+    --kv-error: #f87171;
+    --kv-error-bg: #3a1f22;
+    --kv-syn-key: #93b4f8;
+    --kv-syn-string: #6ee7b7;
+    --kv-syn-number: #d8b4fe;
+  }
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--kv-canvas);
+  color: var(--kv-fg);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  -webkit-user-select: none;
+  overflow: hidden;
+}
+
+/* Text the user may want to copy stays selectable. */
+.selectable,
+.cm-editor {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+:focus-visible {
+  outline: 2px solid var(--kv-accent);
+  outline-offset: -2px;
+}
+
+/* Table rows and log lines are absolutely positioned by the virtualizer;
+   containment keeps layout/paint work local to each row. */
+.vrow {
+  contain: strict;
+}
+
+.cm-editor {
+  height: 100%;
+  font-size: 12px;
+}
+.cm-editor .cm-scroller {
+  font-family: var(--font-mono);
+}
