@@ -49,7 +49,10 @@ echo "version: $version"
 
 if $updater; then
   archive="$bundle/macos/KubeViewer.app.tar.gz"
-  test -s "$archive" && test -s "$archive.sig" || { echo "missing $archive(.sig)" >&2; exit 1; }
+  if [ ! -s "$archive" ] || [ ! -s "$archive.sig" ]; then
+    echo "missing $archive or its .sig" >&2
+    exit 1
+  fi
   tmp=$(mktemp -d)
   trap 'rm -rf "$tmp"' EXIT
   # tauri.conf.json and the .sig file hold base64-encoded minisign files.
