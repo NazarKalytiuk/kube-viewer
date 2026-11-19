@@ -56,10 +56,10 @@ jobs:
       - name: Release notes
         id: notes
         run: |
-          notes=$(node scripts/release.mjs notes "$TAG")
+          node scripts/release.mjs notes "$TAG" > "$RUNNER_TEMP/notes.md"
           {
             echo "body<<__KUBEVIEWER_NOTES__"
-            echo "$notes"
+            cat "$RUNNER_TEMP/notes.md"
             echo "__KUBEVIEWER_NOTES__"
           } >> "$GITHUB_OUTPUT"
           if [[ "$TAG" == *-* ]]; then echo "prerelease=true"; else echo "prerelease=false"; fi >> "$GITHUB_OUTPUT"
@@ -97,30 +97,31 @@ jobs:
           releaseDraft: true
           prerelease: ${{ steps.notes.outputs.prerelease }}
           args: --target universal-apple-darwin --config src-tauri/tauri.release.conf.json
-          uploadUpdaterJson: true
+          # latest.json is written below with public download URLs instead of the
+          # rate-limited api.github.com asset URLs tauri-action would use.
+          uploadUpdaterJson: false
           retryAttempts: 1
 
       - name: Verify bundle and updater signature
         run: scripts/verify-bundle.sh "$BUNDLE" --archs "x86_64 arm64" --updater
 
-      - name: Verify latest.json
+      - name: Updater feed (latest.json)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release download "$TAG" --pattern latest.json --dir "$RUNNER_TEMP"
-          json="$RUNNER_TEMP/latest.json"
-          jq . "$json"
-          test "$(jq -r .version "$json")" = "${TAG#v}"
-          sig=$(cat "$BUNDLE/macos/KubeViewer.app.tar.gz.sig")
-          # tauri-action links assets by API URL (the updater sends Accept: application/octet-stream);
-          # each platform must point at this release's updater archive.
-          archives=$(gh api "repos/${{ github.repository }}/releases" --paginate \
-            --jq ".[] | select(.tag_name == \"$TAG\") | .assets[] | select(.name | endswith(\".app.tar.gz\")) | .url, .browser_download_url")
-          for platform in darwin-aarch64 darwin-x86_64; do
-            test "$(jq -r --arg p "$platform" '.platforms[$p].signature' "$json")" = "$sig"
-            url=$(jq -r --arg p "$platform" '.platforms[$p].url' "$json")
-            grep -qxF "$url" <<<"$archives" || { echo "::error::$platform url $url is not this release's updater archive"; exit 1; }
-          done
+          asset=$(gh api "repos/$GITHUB_REPOSITORY/releases" --paginate \
+            --jq ".[] | select(.tag_name == \"$TAG\") | .assets[] | select(.name | endswith(\".app.tar.gz\")) | .name")
+          if [ -z "$asset" ] || [ "$(wc -l <<<"$asset")" -ne 1 ]; then
+            echo "::error::expected exactly one updater archive in the release, got: $asset"
+            exit 1
+          fi
+          # The uploaded archive must be byte-identical to the one verified above.
+          gh release download "$TAG" --pattern "$asset" --dir "$RUNNER_TEMP/uploaded"
+          cmp "$RUNNER_TEMP/uploaded/$asset" "$BUNDLE/macos/KubeViewer.app.tar.gz"
+          node scripts/update-feed.mjs --repo "$GITHUB_REPOSITORY" --tag "$TAG" --asset "$asset" \
+            --signature "$BUNDLE/macos/KubeViewer.app.tar.gz.sig" --notes "$RUNNER_TEMP/notes.md" > "$RUNNER_TEMP/latest.json"
+          jq . "$RUNNER_TEMP/latest.json"
+          gh release upload "$TAG" "$RUNNER_TEMP/latest.json" --clobber
 
       - name: Publish
         env:
