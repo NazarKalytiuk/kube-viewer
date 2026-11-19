@@ -18,7 +18,16 @@ for (const scheme of ["light", "dark"] as const) {
     await page.locator(".cm-content").waitFor();
     await page.screenshot({ path: `${process.env.SCREENS}/yaml-${scheme}.png` });
     await page.getByRole("tab", { name: "logs" }).click();
-    await page.getByText("5,000 lines").waitFor();
+    await page.getByText(/50,000 lines/).waitFor();
     await page.screenshot({ path: `${process.env.SCREENS}/logs-${scheme}.png` });
+    await page.getByLabel("Search logs").fill("error");
+    await page.getByText("50 matches").waitFor();
+    await page.getByLabel("Search logs").press("Enter");
+    await page.getByText("1 / 50").waitFor();
+    await page.getByRole("button", { name: "Download…" }).click();
+    await page.screenshot({ path: `${process.env.SCREENS}/logs-find-${scheme}.png` });
+    await page.getByRole("button", { name: "Expand panel" }).click();
+    await page.getByRole("radio", { name: "UTC" }).click();
+    await page.screenshot({ path: `${process.env.SCREENS}/logs-expanded-${scheme}.png` });
   });
 }

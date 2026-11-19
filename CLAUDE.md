@@ -8,7 +8,13 @@ Tauri 2 + Rust (`src-tauri`) + Solid 1.9 + Tailwind 4 (`src`). macOS first. Read
   - Table data lives in `view/store.rs` (`ViewStore`); the frontend pulls windows via `get_rows`.
   - New lists must be virtualized (TanStack Virtual, fixed row height).
 - **Stay on Solid 1.9.x** until `vite-plugin-solid`, TanStack Virtual and Kobalte support Solid 2.
-- **Subscriptions** (`open_view`, `open_detail`, `open_logs`):
+- **Logs** live in `logs/`:
+  - `LogStore` holds the lines, with a memory budget, line numbers and incremental matches.
+  - `session` handles backlog, then per-container followers resuming from the last timestamp.
+  - `download` exports via a k-way merge into a `.partial` file, then renames it.
+
+  Logs are always fetched with `timestamps=true`. Time formatting happens in Rust (`timefmt`) for the viewer and for exports alike.
+- **Subscriptions** (`open_view`, `open_detail`, `open_logs`, `download_logs`):
   - They are tasks in `subscriptions.rs`.
   - The frontend must call `close()` in `onCleanup`.
   - Backend tasks must end when their sink returns `false`.
@@ -19,6 +25,7 @@ Tauri 2 + Rust (`src-tauri`) + Solid 1.9 + Tailwind 4 (`src`). macOS first. Read
   4. the e2e mock, if the UI depends on it.
 
   `every_kind_matches_its_column_count` and `kind_scope_matches_type_scope` guard consistency.
+- **Solid gotcha:** `<Show>`/`<For>` children run once. Return JSX with `{expr}` holes, never a plain template string (it would never update).
 - **Secrets:** values must never appear in rows, detail, YAML or logs. Only `reveal_secret` returns them, on explicit user action.
 - **TLS:** never default `insecure_skip_tls_verify` to true.
 - **Errors** cross IPC as `{ code, message }` (`error.rs`). Map new failure modes to a code.

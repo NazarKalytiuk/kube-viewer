@@ -4,7 +4,7 @@
 import { createVirtualizer } from "@tanstack/solid-virtual";
 import { For, Show, createEffect, createMemo, on } from "solid-js";
 import { cellText, nowSeconds } from "../lib/format";
-import type { RowWindow } from "../lib/rowWindow";
+import type { WindowCache } from "../lib/windowCache";
 import type { Cell, Column, Row, SortSpec, Tone } from "../lib/types";
 
 export const ROW_HEIGHT = 26;
@@ -21,7 +21,7 @@ export interface ResourceTableProps {
   total: number;
   /** Bumped whenever the row cache changes. */
   revision: number;
-  rows: RowWindow;
+  rows: WindowCache<Row>;
   sort: SortSpec;
   onSort: (column: string) => void;
   selectedUid: string | null;

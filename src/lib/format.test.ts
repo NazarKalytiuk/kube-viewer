@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { authLabel, cellText, formatAge } from "./format";
+import { authLabel, cellText, formatAge, formatBytes } from "./format";
 
 describe("formatAge", () => {
   const age = (seconds: number) => formatAge(0, seconds);
@@ -36,5 +36,13 @@ describe("authLabel", () => {
   it("shows the exec plugin binary name", () => {
     expect(authLabel({ type: "exec", command: "/usr/local/bin/aws" })).toBe("exec: aws");
     expect(authLabel({ type: "client_certificate" })).toBe("client certificate");
+  });
+});
+
+describe("formatBytes", () => {
+  it("uses binary units", () => {
+    expect(formatBytes(512)).toBe("512 B");
+    expect(formatBytes(1536)).toBe("1.5 KB");
+    expect(formatBytes(50 * 1024 * 1024)).toBe("50 MB");
   });
 });

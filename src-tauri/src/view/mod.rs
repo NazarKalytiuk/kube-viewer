@@ -1,4 +1,4 @@
-//! Live subscriptions: table views, single-object detail and pod logs.
+//! Live subscriptions: table views and single-object detail.
 //!
 //! Each subscription is a tokio task that pushes events through a sink
 //! (a Tauri `Channel` in the app, a plain closure in tests). High-frequency
@@ -6,7 +6,6 @@
 //! times per second regardless of cluster churn.
 
 pub mod detail;
-pub mod logs;
 pub mod store;
 
 use std::sync::{Arc, Mutex};

@@ -168,15 +168,86 @@ export type DetailEvent =
   | { type: "deleted" }
   | { type: "error"; error: AppError };
 
-export interface LogOptions {
-  container: string | null;
+export type TimeMode = "none" | "local" | "utc";
+
+export interface LogRequest {
+  containers: string[];
+  /** Lines of history per container; null = all. */
   tailLines: number | null;
-  timestamps: boolean;
+  /** Only history newer than this; null = no limit. */
+  sinceSeconds: number | null;
   previous: boolean;
   follow: boolean;
 }
 
-export type LogEvent =
-  | { type: "lines"; lines: string[] }
-  | { type: "end" }
+export interface LogOpened {
+  id: number;
+  containers: string[];
+}
+
+export type LogPhase = "loading" | "following" | "reconnecting" | "ended";
+
+export interface LogStatus {
+  version: number;
+  visible: number;
+  lines: number;
+  dropped: number;
+  matches: number;
+  phase: LogPhase;
+  error: AppError | null;
+}
+
+export interface LogQuery {
+  text: string;
+  regex: boolean;
+  caseSensitive: boolean;
+  mode: "filter" | "find";
+}
+
+export interface LogQueryResult {
+  version: number;
+  visible: number;
+  matches: number;
+}
+
+export interface LogLine {
+  /** Line number in the session. */
+  n: number;
+  /** Formatted time (absent when hidden). */
+  ts?: string;
+  /** Container index. */
+  c: number;
+  text: string;
+}
+
+export interface LogWindow {
+  version: number;
+  total: number;
+  start: number;
+  lines: LogLine[];
+}
+
+export interface FindResult {
+  index: number;
+  ordinal: number;
+  matches: number;
+}
+
+export interface DownloadRequest {
+  containers: string[];
+  previous: boolean;
+  timeMode: TimeMode;
+  containerPrefix: boolean;
+  path: string;
+}
+
+export type DownloadEvent =
+  | { type: "progress"; lines: number; bytes: number }
+  | { type: "done"; path: string; lines: number; bytes: number }
   | { type: "error"; error: AppError };
+
+export interface SaveResult {
+  path: string;
+  lines: number;
+  bytes: number;
+}

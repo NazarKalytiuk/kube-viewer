@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Main window: core IPC only. All cluster access goes through typed app commands.",
+  "description": "Main window. Cluster access goes through typed app commands; plugins are limited to the save dialog and revealing exported files.",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "dialog:allow-save", "opener:allow-reveal-item-in-dir"]
 }

@@ -2,7 +2,7 @@
 
 import { Show, createSignal, onCleanup, onMount } from "solid-js";
 import { api, toAppError, type Subscription } from "../lib/api";
-import { RowWindow } from "../lib/rowWindow";
+import { WindowCache } from "../lib/windowCache";
 import type { AppError, Column, ResourceKind, Row, SortSpec, ViewUpdate } from "../lib/types";
 import { session } from "../stores/session";
 import { DetailPanel } from "./DetailPanel";
@@ -23,16 +23,19 @@ export function ResourceView(props: { context: string; kind: ResourceKind; names
   const [openError, setOpenError] = createSignal<AppError | null>(null);
   const [filter, setFilter] = createSignal("");
   const [detailWidth, setDetailWidth] = createSignal(loadDetailWidth());
+  const [detailExpanded, setDetailExpanded] = createSignal(false);
+  const expanded = () => detailExpanded() && !!session.state.selection;
 
   let viewId: number | null = null;
   let sub: Subscription | null = null;
   let disposed = false;
   let filterTimer: number | undefined;
 
-  const rows = new RowWindow(
-    (start, end) => {
-      if (viewId === null) return Promise.resolve({ version: 0, total: 0, start, rows: [] });
-      return api.getRows(viewId, start, end);
+  const rows = new WindowCache<Row>(
+    async (start, end) => {
+      if (viewId === null) return { version: 0, total: 0, start, items: [] };
+      const w = await api.getRows(viewId, start, end);
+      return { version: w.version, total: w.total, start: w.start, items: w.rows };
     },
     (t) => {
       setTotal(t);
@@ -105,7 +108,7 @@ export function ResourceView(props: { context: string; kind: ResourceKind; names
 
   return (
     <div class="flex h-full min-w-0 flex-1">
-      <section class="flex min-w-0 flex-1 flex-col">
+      <section class="flex min-w-0 flex-1 flex-col" classList={{ hidden: expanded() }}>
         <header class="flex items-center gap-3 border-b border-line px-3 py-2">
           <h1 class="text-[15px] font-semibold">{props.title}</h1>
           <span class="tabular-nums text-muted" aria-live="polite">
@@ -163,14 +166,25 @@ export function ResourceView(props: { context: string; kind: ResourceKind; names
       <Show when={session.state.selection} keyed>
         {(selection) => (
           <>
-            <Splitter width={detailWidth()} onResize={setDetailWidth} />
-            <div class="h-full shrink-0 border-l border-line" style={{ width: `${detailWidth()}px` }}>
+            <Show when={!expanded()}>
+              <Splitter width={detailWidth()} onResize={setDetailWidth} />
+            </Show>
+            <div
+              class="h-full border-l border-line"
+              classList={{ "flex-1 min-w-0": expanded(), "shrink-0": !expanded() }}
+              style={expanded() ? {} : { width: `${detailWidth()}px` }}
+            >
               <DetailPanel
                 context={props.context}
                 kind={props.kind}
                 namespace={selection.namespace}
                 name={selection.name}
-                onClose={() => session.select(null)}
+                onClose={() => {
+                  setDetailExpanded(false);
+                  session.select(null);
+                }}
+                expanded={expanded()}
+                onToggleExpand={() => setDetailExpanded((v) => !v)}
               />
             </div>
           </>

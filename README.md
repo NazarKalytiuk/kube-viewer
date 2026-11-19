@@ -16,7 +16,20 @@ It is built to stay smooth on very large clusters: 100k-object views load in abo
   - **Status:** type-specific fields and conditions.
   - **Labels:** labels and annotations.
   - **YAML:** CodeMirror with search and folding; `managedFields` is stripped.
-  - **Logs:** follow, history size, timestamps, previous container and filter, with a 200k-line bounded buffer.
+  - A button to expand the panel to full width.
+- **Logs** (built for heavy use):
+  - **Storage:** logs live in Rust with a 256 MB budget per view; only visible lines reach the UI. 1M lines: filter ~16 ms, regex ~35 ms, find-next under 1 µs.
+  - **Time:** timestamps are always fetched and parsed once. **No time / Local / UTC** switches instantly, without reloading.
+  - **History:** last 100 / 1k / 10k lines, last 5 min / 1 h / 24 h, or everything. A **Previous** toggle shows the crashed container instance.
+  - **All containers:** one view, merged by timestamp, with a colored container tag on each line.
+  - **Live follow:** resumes after container restarts and dropped connections with no gaps or duplicates (resumes from the last timestamp). Init containers and finished pods stop cleanly.
+  - **Search:** **Find** (highlight, ↑/↓, Enter / ⇧Enter, "3 / 120") or **Filter** (matching lines only); regex and match-case options; ⌘F.
+  - **Reading:** ANSI colors, ERROR/WARN highlighting, line numbers, wrap toggle.
+  - **Auto-scroll:** pauses when you scroll up; a "↓ N new lines" pill brings you back.
+  - **Download:**
+    - *Full log from cluster* streams straight to disk (constant memory, merged by time across containers, progress and cancel).
+    - *Loaded lines* saves exactly what is shown, filter included.
+    - Both offer UTC / local / no time and an optional `[container]` prefix, write atomically (`.partial` then rename), and offer *Show in Finder*.
 - Secrets are masked everywhere, including the `last-applied-configuration` annotation. Values are fetched only when you click **Reveal values**.
 - RBAC-friendly. If listing namespaces is forbidden, the app falls back to the context's namespace and lets you type one. Errors never lock you out of switching contexts.
 

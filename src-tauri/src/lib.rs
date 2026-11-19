@@ -4,6 +4,7 @@ pub mod cluster;
 pub mod commands;
 pub mod error;
 pub mod kubeconfig;
+pub mod logs;
 pub mod resources;
 pub mod shell_env;
 pub mod subscriptions;
@@ -21,6 +22,8 @@ pub fn run() {
         .init();
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .manage(commands::AppState::default())
         .invoke_handler(tauri::generate_handler![
             commands::resource_kinds,
@@ -33,6 +36,12 @@ pub fn run() {
             commands::row_index,
             commands::open_detail,
             commands::open_logs,
+            commands::set_log_query,
+            commands::get_log_lines,
+            commands::find_log_match,
+            commands::save_loaded_logs,
+            commands::download_logs,
+            commands::default_log_path,
             commands::close_subscription,
             commands::reset_subscriptions,
             commands::reveal_secret,

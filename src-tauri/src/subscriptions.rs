@@ -6,12 +6,25 @@ use std::sync::{Arc, Mutex, Weak};
 
 use futures::future::BoxFuture;
 
+use crate::logs::store::LogStore;
 use crate::view::store::ViewStore;
+
+/// Data a subscription exposes to window/query commands.
+#[derive(Clone, Default)]
+pub enum Attachment {
+    #[default]
+    None,
+    Table(Arc<Mutex<ViewStore>>),
+    Logs {
+        store: Arc<Mutex<LogStore>>,
+        containers: Arc<Vec<String>>,
+    },
+}
 
 struct Entry {
     context: String,
     task: tokio::task::AbortHandle,
-    view: Option<Arc<Mutex<ViewStore>>>,
+    attachment: Attachment,
 }
 
 #[derive(Default)]
@@ -26,7 +39,7 @@ impl Subscriptions {
     pub fn spawn(
         self: &Arc<Self>,
         context: &str,
-        view: Option<Arc<Mutex<ViewStore>>>,
+        attachment: Attachment,
         task: BoxFuture<'static, ()>,
     ) -> u64 {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed) + 1;
@@ -49,7 +62,7 @@ impl Subscriptions {
             Entry {
                 context: context.to_string(),
                 task: handle.abort_handle(),
-                view,
+                attachment,
             },
         );
         id
@@ -87,12 +100,20 @@ impl Subscriptions {
         }
     }
 
-    pub fn view(&self, id: u64) -> Option<Arc<Mutex<ViewStore>>> {
+    pub fn attachment(&self, id: u64) -> Attachment {
         self.entries
             .lock()
             .expect("subscriptions poisoned")
             .get(&id)
-            .and_then(|e| e.view.clone())
+            .map(|e| e.attachment.clone())
+            .unwrap_or_default()
+    }
+
+    pub fn view(&self, id: u64) -> Option<Arc<Mutex<ViewStore>>> {
+        match self.attachment(id) {
+            Attachment::Table(store) => Some(store),
+            _ => None,
+        }
     }
 
     /// Number of running subscriptions.
@@ -110,7 +131,7 @@ mod tests {
     #[tokio::test]
     async fn finished_tasks_remove_themselves() {
         let subs = Arc::new(Subscriptions::default());
-        subs.spawn("ctx", None, async {}.boxed());
+        subs.spawn("ctx", Attachment::None, async {}.boxed());
         tokio::time::sleep(Duration::from_millis(20)).await;
         assert_eq!(subs.active(), 0);
     }
@@ -118,8 +139,8 @@ mod tests {
     #[tokio::test]
     async fn close_context_aborts_only_that_context() {
         let subs = Arc::new(Subscriptions::default());
-        let a = subs.spawn("a", None, futures::future::pending().boxed());
-        let b = subs.spawn("b", None, futures::future::pending().boxed());
+        let a = subs.spawn("a", Attachment::None, futures::future::pending().boxed());
+        let b = subs.spawn("b", Attachment::None, futures::future::pending().boxed());
         assert_ne!(a, b);
         subs.close_context("a");
         assert_eq!(subs.active(), 1);

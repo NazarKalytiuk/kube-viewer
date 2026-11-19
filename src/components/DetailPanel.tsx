@@ -16,6 +16,9 @@ export interface DetailPanelProps {
   namespace: string | null;
   name: string;
   onClose: () => void;
+  /** Panel fills the whole view (table hidden). */
+  expanded: boolean;
+  onToggleExpand: () => void;
 }
 
 let lastTab: Tab = "status";
@@ -71,9 +74,18 @@ export function DetailPanel(props: DetailPanelProps) {
           </div>
           <div class="truncate text-[12px] text-muted">
             {props.namespace ? `${props.namespace} · ` : ""}
-            <Show when={detail()?.created}>{(c) => `created ${formatAge(c(), nowSeconds())} ago`}</Show>
+            <Show when={detail()?.created}>{(c) => <>created {formatAge(c(), nowSeconds())} ago</>}</Show>
           </div>
         </div>
+        <button
+          aria-label={props.expanded ? "Restore panel" : "Expand panel"}
+          aria-pressed={props.expanded}
+          title={props.expanded ? "Show the table again" : "Use the full width (great for logs)"}
+          class="rounded px-2 text-[14px] text-muted hover:bg-hover hover:text-fg"
+          onClick={() => props.onToggleExpand()}
+        >
+          {props.expanded ? "⇥" : "⇤"}
+        </button>
         <button aria-label="Close details" class="rounded px-2 text-[16px] text-muted hover:bg-hover hover:text-fg" onClick={() => props.onClose()}>
           ×
         </button>

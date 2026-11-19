@@ -4,6 +4,8 @@
 
 export interface MockOptions {
   podCount: number;
+  /** Log lines per container in the pod log mock. */
+  logLines?: number;
 }
 
 // This function is serialized into the page: it must be self-contained.
@@ -15,6 +17,10 @@ export function installMockBackend(options: MockOptions) {
   let nextCallback = 1;
   const channelIndex = new Map<number, number>();
   const views = new Map<number, View>();
+  type MockLine = { ms: number; c: number; text: string };
+  type LogSession = { lines: MockLine[]; query: { re: RegExp; mode: string } | null; channel: { id: number }; version: number; containers: string[] };
+  const logSessions = new Map<number, LogSession>();
+  const calls: { cmd: string; args: Record<string, any> }[] = [];
   let nextSub = 1;
   const now = Math.floor(Date.now() / 1000);
 
@@ -54,6 +60,25 @@ export function installMockBackend(options: MockOptions) {
       });
     }
     return rows;
+  }
+
+  function matches(s: LogSession) {
+    return s.query ? s.lines.filter((l) => s.query!.re.test(l.text)) : [];
+  }
+  function visibleLines(s: LogSession) {
+    const all = s.lines.map((line, i) => ({ line, n: i + 1 }));
+    return s.query?.mode === "filter" ? all.filter((x) => s.query!.re.test(x.line.text)) : all;
+  }
+  function sendLogStatus(s: LogSession) {
+    send(s.channel, {
+      version: s.version,
+      visible: visibleLines(s).length,
+      lines: s.lines.length,
+      dropped: 0,
+      matches: matches(s).length,
+      phase: "following",
+      error: null,
+    });
   }
 
   function cmp(a: unknown, b: unknown): number {
@@ -122,16 +147,98 @@ export function installMockBackend(options: MockOptions) {
           annotations: {},
           sections: [{ title: "Pod", fields: [{ label: "Status", value: "Running" }] }],
           conditions: [{ type: "Ready", status: "True", reason: null, message: null, lastTransition: now - 60 }],
-          containers: [{ name: "app", init: false }],
+          containers: [
+            { name: "app", init: false },
+            { name: "sidecar", init: false },
+          ],
           yaml: `apiVersion: v1\nkind: Pod\nmetadata:\n  name: ${name}\n  namespace: ${namespace}\n`,
         },
       });
       return nextSub++;
     },
-    open_logs: ({ onEvent }) => {
-      const lines = Array.from({ length: 5000 }, (_, i) => `2026-11-19T10:00:00Z line ${i}${i % 1000 === 0 ? " ERROR something failed" : ""}`);
-      send(onEvent, { type: "lines", lines });
-      return nextSub++;
+    open_logs: ({ request, onStatus }) => {
+      const containers: string[] = request.containers;
+      const count = options.logLines ?? 50_000;
+      const base = Date.UTC(2026, 10, 19, 10, 0, 0);
+      const lines: MockLine[] = [];
+      for (let i = 0; i < count; i++) {
+        containers.forEach((_, c) => {
+          const level =
+            i % 1000 === 0
+              ? "ERROR something failed"
+              : i % 500 === 0
+                ? "WARN slow request"
+                : i % 7 === 0
+                  ? "\x1b[32mGET\x1b[0m /api/orders \x1b[36m200\x1b[0m 12ms"
+                  : "INFO ok";
+          lines.push({ ms: base + i * 10 + c, c, text: `${containers[c]} line ${i} ${level}` });
+        });
+      }
+      const id = nextSub++;
+      const session: LogSession = { lines, query: null, channel: onStatus, version: 1, containers };
+      logSessions.set(id, session);
+      sendLogStatus(session);
+      return { id, containers };
+    },
+    set_log_query: ({ id, query }) => {
+      const s = logSessions.get(id)!;
+      if (query) {
+        let re: RegExp;
+        try {
+          re = new RegExp(query.regex ? query.text : query.text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), query.caseSensitive ? "" : "i");
+        } catch (e) {
+          throw { code: "invalid_request", message: `invalid regular expression: ${(e as Error).message}` };
+        }
+        s.query = { re, mode: query.mode };
+      } else {
+        s.query = null;
+      }
+      s.version++;
+      const v = visibleLines(s);
+      return { version: s.version, visible: v.length, matches: matches(s).length };
+    },
+    get_log_lines: ({ id, start, end, timeMode }) => {
+      const s = logSessions.get(id)!;
+      const v = visibleLines(s);
+      const lines = v.slice(start, end).map(({ line, n }) => ({
+        n,
+        c: line.c,
+        text: line.text,
+        ...(timeMode === "utc" ? { ts: new Date(line.ms).toISOString() } : timeMode === "local" ? { ts: `L ${new Date(line.ms).toISOString().slice(0, 23).replace("T", " ")}` } : {}),
+      }));
+      return { version: s.version, total: v.length, start, lines };
+    },
+    find_log_match: ({ id, from, forward }) => {
+      const s = logSessions.get(id)!;
+      const v = visibleLines(s);
+      const idx = v.map((x, i) => (s.query && s.query.re.test(x.line.text) ? i : -1)).filter((i) => i >= 0);
+      if (!idx.length) return null;
+      let k: number;
+      if (from === null) k = forward ? 0 : idx.length - 1;
+      else if (forward) {
+        k = idx.findIndex((i) => i > from);
+        if (k < 0) k = 0;
+      } else {
+        k = -1;
+        for (let j = idx.length - 1; j >= 0; j--) if (idx[j]! < from) { k = j; break; }
+        if (k < 0) k = idx.length - 1;
+      }
+      return { index: idx[k], ordinal: k + 1, matches: idx.length };
+    },
+    default_log_path: ({ fileName }) => `/Users/test/Downloads/${fileName}`,
+    "plugin:dialog|save": ({ options }) => options.defaultPath,
+    "plugin:opener|reveal_item_in_dir": () => null,
+    download_logs: ({ request, onEvent }) => {
+      const id = nextSub++;
+      const total = (options.logLines ?? 50_000) * request.containers.length;
+      send(onEvent, { type: "progress", lines: Math.floor(total / 2), bytes: total * 20 });
+      send(onEvent, { type: "done", path: request.path, lines: total, bytes: total * 40 });
+      return id;
+    },
+    save_loaded_logs: ({ id, path }) => {
+      const s = logSessions.get(id)!;
+      const n = visibleLines(s).length;
+      return { path, lines: n, bytes: n * 40 };
     },
     close_subscription: ({ id }) => {
       views.delete(id);
@@ -150,10 +257,23 @@ export function installMockBackend(options: MockOptions) {
       callbacks.delete(id);
     },
     async invoke(cmd: string, args: Record<string, any> = {}) {
+      calls.push({ cmd, args });
       const handler = handlers[cmd];
       if (!handler) throw { code: "internal", message: `mock: unknown command ${cmd}` };
       return handler(args);
     },
   };
-  (window as any).__KV_MOCK__ = { views };
+  (window as any).__KV_MOCK__ = {
+    views,
+    calls,
+    /** Appends live lines to every open log session. */
+    appendLogs(count: number) {
+      for (const s of logSessions.values()) {
+        const last = s.lines[s.lines.length - 1]?.ms ?? Date.now();
+        for (let i = 0; i < count; i++) s.lines.push({ ms: last + (i + 1) * 10, c: 0, text: `${s.containers[0]} live ${i}` });
+        s.version++;
+        sendLogStatus(s);
+      }
+    },
+  };
 }

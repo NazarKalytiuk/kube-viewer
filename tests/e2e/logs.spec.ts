@@ -1,0 +1,111 @@
+import { expect, test, type Page } from "@playwright/test";
+import { installMockBackend } from "./mockBackend";
+
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() => window.localStorage.clear());
+  await page.addInitScript(installMockBackend, { podCount: 100, logLines: 50_000 });
+  await page.goto("/");
+  await page.locator('[role="row"][aria-rowindex]').first().click();
+  await page.getByRole("tab", { name: "logs" }).click();
+  await expect(page.getByText(/50,000 lines/)).toBeVisible();
+});
+
+const logLines = (page: Page) => page.locator("[data-line]");
+const lastCall = (page: Page, cmd: string) =>
+  page.evaluate((c) => [...(window as any).__KV_MOCK__.calls].reverse().find((x: any) => x.cmd === c)?.args, cmd);
+
+test("opens at the newest line with a bounded DOM", async ({ page }) => {
+  await expect(logLines(page).last()).toContainText("app line 49999");
+  expect(await logLines(page).count()).toBeLessThan(200);
+});
+
+test("switches time display without refetching the stream", async ({ page }) => {
+  const opens = () => page.evaluate(() => (window as any).__KV_MOCK__.calls.filter((c: any) => c.cmd === "open_logs").length);
+  const before = await opens();
+  await expect(logLines(page).last()).toContainText("L 2026-11-19");
+
+  await page.getByRole("radio", { name: "UTC" }).click();
+  await expect(logLines(page).last()).toContainText(/2026-11-19T\d\d:\d\d:\d\d\.\d{3}Z/);
+  await page.getByRole("radio", { name: "No time" }).click();
+  await expect(logLines(page).last()).not.toContainText("2026-11-19");
+  expect(await opens()).toBe(before);
+  expect((await lastCall(page, "get_log_lines")).timeMode).toBe("none");
+});
+
+test("find jumps between matches and highlights them", async ({ page }) => {
+  const search = page.getByLabel("Search logs");
+  await search.fill("error");
+  await expect(page.getByText("50 matches")).toBeVisible();
+  await search.press("Enter");
+  await expect(page.getByText("1 / 50")).toBeVisible();
+  await expect(page.locator("[data-line].bg-selected")).toContainText("app line 0 ERROR");
+  await search.press("Enter");
+  await expect(page.getByText("2 / 50")).toBeVisible();
+  await expect(page.locator("[data-line].bg-selected")).toContainText("app line 1000 ERROR");
+  await search.press("Shift+Enter");
+  await expect(page.getByText("1 / 50")).toBeVisible();
+  await expect(page.locator(".kv-mark").first()).toBeVisible();
+  // Jumping to a match pauses following without inventing "new" lines.
+  await expect(page.getByRole("button", { name: "↓ Jump to end" })).toBeVisible();
+});
+
+test("filter shows only matching lines; invalid regex is reported", async ({ page }) => {
+  await page.getByRole("radio", { name: "Filter" }).click();
+  await page.getByLabel("Search logs").fill("warn");
+  await expect(page.getByText(/50 of 50,000 lines/)).toBeVisible();
+  await expect(logLines(page)).toHaveCount(50);
+
+  await page.getByLabel(".*").check();
+  await page.getByLabel("Search logs").fill("(");
+  await expect(page.getByRole("alert")).toContainText("invalid regular expression");
+});
+
+test("merges all containers with tags", async ({ page }) => {
+  await page.getByLabel("Container").selectOption({ label: "All containers" });
+  await expect(page.getByText(/100,000 lines/)).toBeVisible();
+  expect((await lastCall(page, "open_logs")).request.containers).toEqual(["app", "sidecar"]);
+  await expect(logLines(page).last()).toContainText("sidecar");
+});
+
+test("auto-scroll pauses when scrolling up and counts new lines", async ({ page }) => {
+  const scroller = page.getByLabel("Log lines");
+  await scroller.hover();
+  await page.mouse.wheel(0, -3000);
+  await expect(page.getByRole("button", { name: "↓ Jump to end" })).toBeVisible();
+  await page.evaluate(() => (window as any).__KV_MOCK__.appendLogs(7));
+  const pill = page.getByRole("button", { name: "↓ 7 new lines" });
+  await expect(pill).toBeVisible();
+  await pill.click();
+  await expect(logLines(page).last()).toContainText("app live 6");
+});
+
+test("downloads the full log in the chosen time format", async ({ page }) => {
+  await page.getByRole("button", { name: "Download…" }).click();
+  await page.getByLabel("Time format").selectOption("local");
+  await page.getByRole("button", { name: "Save as…" }).click();
+  await expect(page.getByText(/Saved 50,000 lines/)).toBeVisible();
+  await expect(page.getByRole("button", { name: "Show in Finder" })).toBeVisible();
+  const args = await lastCall(page, "download_logs");
+  expect(args.request).toMatchObject({ containers: ["app"], timeMode: "local", previous: false, containerPrefix: false });
+  expect(args.request.path).toMatch(/^\/Users\/test\/Downloads\/pod-000000_app_\d{8}-\d{6}\.log$/);
+});
+
+test("saves exactly the filtered lines", async ({ page }) => {
+  await page.getByRole("radio", { name: "Filter" }).click();
+  await page.getByLabel("Search logs").fill("error");
+  await expect(page.getByText(/50 of 50,000 lines/)).toBeVisible();
+  await page.getByRole("button", { name: "Download…" }).click();
+  await page.getByRole("radio", { name: /Loaded lines \(50, filtered\)/ }).click();
+  await page.getByRole("button", { name: "Save as…" }).click();
+  await expect(page.getByText(/Saved 50 lines/)).toBeVisible();
+});
+
+test("expands the panel to full width and back, keeping the table alive", async ({ page }) => {
+  await page.getByRole("button", { name: "Expand panel" }).click();
+  await expect(page.getByRole("grid")).toBeHidden();
+  const box = await page.getByLabel("Log lines").boundingBox();
+  expect(box!.width).toBeGreaterThan(1000);
+  await page.getByRole("button", { name: "Restore panel" }).click();
+  await expect(page.getByRole("grid")).toBeVisible();
+  await expect(page.locator('[role="row"][aria-rowindex]').first()).toContainText("pod-000000");
+});

@@ -7,14 +7,23 @@ import type {
   ClusterInfo,
   ContextList,
   DetailEvent,
+  DownloadEvent,
+  DownloadRequest,
+  FindResult,
   KindInfo,
-  LogEvent,
-  LogOptions,
+  LogOpened,
+  LogQuery,
+  LogQueryResult,
+  LogRequest,
+  LogStatus,
+  LogWindow,
   NamespaceList,
   QueryResult,
   ResourceKind,
   RowsWindow,
+  SaveResult,
   SortSpec,
+  TimeMode,
   ViewOpened,
   ViewUpdate,
 } from "./types";
@@ -79,13 +88,35 @@ export const api = {
   },
 
   async openLogs(
-    params: { context: string; namespace: string; pod: string; options: LogOptions },
-    onEvent: (event: LogEvent) => void,
+    params: { context: string; namespace: string; pod: string; request: LogRequest },
+    onStatus: (status: LogStatus) => void,
+  ): Promise<LogOpened & Subscription> {
+    const channel = new Channel<LogStatus>(onStatus);
+    const opened = await invoke<LogOpened>("open_logs", { ...params, onStatus: channel });
+    return { ...opened, ...subscription(opened.id) };
+  },
+
+  setLogQuery: (id: number, query: LogQuery | null) => invoke<LogQueryResult>("set_log_query", { id, query }),
+
+  getLogLines: (id: number, start: number, end: number, timeMode: TimeMode) =>
+    invoke<LogWindow>("get_log_lines", { id, start, end, timeMode }),
+
+  findLogMatch: (id: number, from: number | null, forward: boolean) =>
+    invoke<FindResult | null>("find_log_match", { id, from, forward }),
+
+  saveLoadedLogs: (id: number, path: string, timeMode: TimeMode, containerPrefix: boolean) =>
+    invoke<SaveResult>("save_loaded_logs", { id, path, timeMode, containerPrefix }),
+
+  async downloadLogs(
+    params: { context: string; namespace: string; pod: string; request: DownloadRequest },
+    onEvent: (event: DownloadEvent) => void,
   ): Promise<Subscription> {
-    const channel = new Channel<LogEvent>(onEvent);
-    const id = await invoke<number>("open_logs", { ...params, onEvent: channel });
+    const channel = new Channel<DownloadEvent>(onEvent);
+    const id = await invoke<number>("download_logs", { ...params, onEvent: channel });
     return subscription(id);
   },
+
+  defaultLogPath: (fileName: string) => invoke<string>("default_log_path", { fileName }),
 
   revealSecret: (context: string, namespace: string, name: string) =>
     invoke<Record<string, string>>("reveal_secret", { context, namespace, name }),
