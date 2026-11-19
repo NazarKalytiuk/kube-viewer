@@ -5,6 +5,8 @@ Each release section becomes the GitHub Release notes and the "What’s new" tex
 
 ## Unreleased
 
+## 0.1.0 — 2026-11-19
+
 First public release.
 
 - Browse 13 resource kinds across contexts and namespaces with live updates. Tables stay fast at 100k+ rows: data stays in Rust, and only the visible rows reach the UI.
