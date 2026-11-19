@@ -109,14 +109,18 @@ jobs:
         run: |
           gh release download "$TAG" --pattern latest.json --dir "$RUNNER_TEMP"
           json="$RUNNER_TEMP/latest.json"
-          sig=$(cat "$BUNDLE/macos/KubeViewer.app.tar.gz.sig")
+          jq . "$json"
           test "$(jq -r .version "$json")" = "${TAG#v}"
+          sig=$(cat "$BUNDLE/macos/KubeViewer.app.tar.gz.sig")
+          # tauri-action links assets by API URL (the updater sends Accept: application/octet-stream);
+          # each platform must point at this release's updater archive.
+          archives=$(gh api "repos/${{ github.repository }}/releases" --paginate \
+            --jq ".[] | select(.tag_name == \"$TAG\") | .assets[] | select(.name | endswith(\".app.tar.gz\")) | .url, .browser_download_url")
           for platform in darwin-aarch64 darwin-x86_64; do
             test "$(jq -r --arg p "$platform" '.platforms[$p].signature' "$json")" = "$sig"
             url=$(jq -r --arg p "$platform" '.platforms[$p].url' "$json")
-            [[ "$url" == https://github.com/${{ github.repository }}/releases/download/$TAG/* ]] || { echo "unexpected url $url"; exit 1; }
+            grep -qxF "$url" <<<"$archives" || { echo "::error::$platform url $url is not this release's updater archive"; exit 1; }
           done
-          jq . "$json"
 
       - name: Publish
         env:
@@ -128,3 +132,7 @@ jobs:
             gh release edit "$TAG" --draft=false --latest
           fi
           gh release view "$TAG" --json url,assets --jq '.url, (.assets[].name)'
+
+      - name: Verify the published update feed
+        if: steps.notes.outputs.prerelease == 'false'
+        run: scripts/verify-update-feed.sh "${TAG#v}"
