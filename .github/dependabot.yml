@@ -1,0 +1,24 @@
+# Weekly dependency updates, grouped so each ecosystem opens at most one PR.
+# Solid stays on 1.x until vite-plugin-solid, TanStack Virtual and Kobalte support 2.x (see CLAUDE.md).
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly }
+    groups:
+      actions: { patterns: ["*"] }
+
+  - package-ecosystem: npm
+    directory: /
+    schedule: { interval: weekly }
+    groups:
+      npm: { patterns: ["*"], update-types: [minor, patch] }
+    ignore:
+      - dependency-name: solid-js
+        update-types: [version-update:semver-major]
+
+  - package-ecosystem: cargo
+    directory: /src-tauri
+    schedule: { interval: weekly }
+    groups:
+      cargo: { patterns: ["*"], update-types: [minor, patch] }

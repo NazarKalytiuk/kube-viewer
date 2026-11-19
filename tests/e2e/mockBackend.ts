@@ -6,6 +6,8 @@ export interface MockOptions {
   podCount: number;
   /** Log lines per container in the pod log mock. */
   logLines?: number;
+  /** Release announced by the update server; none means up to date. */
+  update?: { version: string; notes?: string; fail?: string };
 }
 
 // This function is serialized into the page: it must be self-contained.
@@ -228,6 +230,21 @@ export function installMockBackend(options: MockOptions) {
     default_log_path: ({ fileName }) => `/Users/test/Downloads/${fileName}`,
     "plugin:dialog|save": ({ options }) => options.defaultPath,
     "plugin:opener|reveal_item_in_dir": () => null,
+    "plugin:app|version": () => "0.1.0",
+    "plugin:updater|check": () =>
+      options.update
+        ? { rid: 1, currentVersion: "0.1.0", version: options.update.version, body: options.update.notes, rawJson: {} }
+        : null,
+    "plugin:updater|download_and_install": ({ onEvent }) => {
+      if (options.update?.fail) throw options.update.fail;
+      const total = 12 * 1024 * 1024;
+      send(onEvent, { event: "Started", data: { contentLength: total } });
+      for (let i = 0; i < 4; i++) send(onEvent, { event: "Progress", data: { chunkLength: total / 4 } });
+      send(onEvent, { event: "Finished" });
+      return null;
+    },
+    "plugin:process|restart": () => null,
+    "plugin:resources|close": () => null,
     download_logs: ({ request, onEvent }) => {
       const id = nextSub++;
       const total = (options.logLines ?? 50_000) * request.containers.length;

@@ -3,10 +3,14 @@ import { ErrorNotice } from "./components/ErrorNotice";
 import { ResourceView } from "./components/ResourceView";
 import { Sidebar } from "./components/Sidebar";
 import { session } from "./stores/session";
+import { updater } from "./stores/updater";
 
 export default function App() {
   const { state } = session;
-  onMount(() => void session.init());
+  onMount(() => {
+    void session.init();
+    updater.init();
+  });
 
   // Remount the view whenever context, kind or namespace changes so each
   // combination owns exactly one backend subscription.

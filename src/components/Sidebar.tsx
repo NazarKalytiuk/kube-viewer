@@ -2,6 +2,7 @@ import { For, Show, createMemo, createSignal } from "solid-js";
 import { authLabel } from "../lib/format";
 import type { KindInfo } from "../lib/types";
 import { session } from "../stores/session";
+import { UpdateStatus } from "./UpdateStatus";
 
 export function Sidebar() {
   const { state } = session;
@@ -79,10 +80,13 @@ export function Sidebar() {
         </For>
       </nav>
 
-      <div class="border-t border-line p-2">
+      <div class="space-y-2 border-t border-line p-2">
         <button class="w-full rounded px-2 py-1 text-left text-muted hover:bg-hover" onClick={() => void session.loadContexts()}>
           Reload kubeconfig
         </button>
+        <div class="px-2">
+          <UpdateStatus />
+        </div>
       </div>
     </aside>
   );

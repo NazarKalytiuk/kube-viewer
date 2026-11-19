@@ -1,0 +1,130 @@
+name: Release
+
+# Pushing a vX.Y.Z tag (created by `pnpm release X.Y.Z`) runs the full CI, builds a
+# universal macOS app, signs the updater archive, verifies everything and publishes
+# the GitHub Release. Installed apps pick it up through latest.json.
+# Tags with a pre-release suffix (v1.2.0-beta.1) are published as pre-releases and
+# are not offered to the in-app updater, which only follows the latest release.
+
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  checks:
+    name: Checks
+    uses: ./.github/workflows/ci.yml
+    with:
+      release: true
+
+  publish:
+    name: Build, verify and publish
+    needs: checks
+    runs-on: macos-15
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ github.ref_name }}
+      BUNDLE: src-tauri/target/universal-apple-darwin/release/bundle
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: src-tauri
+          key: release-universal
+      - run: pnpm install --frozen-lockfile
+      - run: brew install minisign
+
+      - name: Release notes
+        id: notes
+        run: |
+          notes=$(node scripts/release.mjs notes "$TAG")
+          {
+            echo "body<<__KUBEVIEWER_NOTES__"
+            echo "$notes"
+            echo "__KUBEVIEWER_NOTES__"
+          } >> "$GITHUB_OUTPUT"
+          if [[ "$TAG" == *-* ]]; then echo "prerelease=true"; else echo "prerelease=false"; fi >> "$GITHUB_OUTPUT"
+
+      # The bundler treats a set-but-empty APPLE_* variable as configured, so these
+      # are exported only when the secrets exist. Without them the app is ad-hoc signed.
+      - name: Developer ID signing and notarization
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ -z "$APPLE_CERTIFICATE" ]; then
+            echo "::notice::No Developer ID configured: the app is ad-hoc signed and not notarized."
+            exit 0
+          fi
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            if [ -z "${!name}" ]; then echo "::error::Secret $name is missing"; exit 1; fi
+            { echo "$name<<__KUBEVIEWER_SECRET__"; echo "${!name}"; echo "__KUBEVIEWER_SECRET__"; } >> "$GITHUB_ENV"
+          done
+
+      - name: Build and upload to a draft release
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # action-v1.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ env.TAG }}
+          releaseName: KubeViewer ${{ env.TAG }}
+          releaseBody: ${{ steps.notes.outputs.body }}
+          releaseDraft: true
+          prerelease: ${{ steps.notes.outputs.prerelease }}
+          args: --target universal-apple-darwin --config src-tauri/tauri.release.conf.json
+          uploadUpdaterJson: true
+          retryAttempts: 1
+
+      - name: Verify bundle and updater signature
+        run: scripts/verify-bundle.sh "$BUNDLE" --archs "x86_64 arm64" --updater
+
+      - name: Verify latest.json
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release download "$TAG" --pattern latest.json --dir "$RUNNER_TEMP"
+          json="$RUNNER_TEMP/latest.json"
+          sig=$(cat "$BUNDLE/macos/KubeViewer.app.tar.gz.sig")
+          test "$(jq -r .version "$json")" = "${TAG#v}"
+          for platform in darwin-aarch64 darwin-x86_64; do
+            test "$(jq -r --arg p "$platform" '.platforms[$p].signature' "$json")" = "$sig"
+            url=$(jq -r --arg p "$platform" '.platforms[$p].url' "$json")
+            [[ "$url" == https://github.com/${{ github.repository }}/releases/download/$TAG/* ]] || { echo "unexpected url $url"; exit 1; }
+          done
+          jq . "$json"
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ "${{ steps.notes.outputs.prerelease }}" = true ]; then
+            gh release edit "$TAG" --draft=false --prerelease --latest=false
+          else
+            gh release edit "$TAG" --draft=false --latest
+          fi
+          gh release view "$TAG" --json url,assets --jq '.url, (.assets[].name)'

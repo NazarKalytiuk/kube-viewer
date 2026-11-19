@@ -3,6 +3,17 @@
 A fast, read-only Kubernetes cluster viewer for macOS. Tauri 2 + Rust + Solid.
 It is built to stay smooth on very large clusters: 100k-object views load in about a second and scroll without lag.
 
+## Install
+
+Download `KubeViewer_<version>_universal.dmg` from [Releases](https://github.com/NazarKalytiuk/kube-viewer/releases/latest). It runs natively on Apple Silicon and Intel, macOS 12+.
+
+Releases are not notarized yet. macOS therefore blocks the first launch. To allow it once, choose either way:
+
+- Open **System Settings → Privacy & Security** and click **Open Anyway**.
+- Or clear the quarantine flag: `xattr -dr com.apple.quarantine /Applications/KubeViewer.app`.
+
+Later versions arrive through the in-app updater, found in the sidebar footer. It checks on launch and every 6 hours. Each update is verified against a signing key built into the app. Installing never restarts the app on its own: you choose when to restart.
+
 ## Features
 
 - Contexts from `KUBECONFIG` / `~/.kube/config`. When launched from Finder, the login shell's `KUBECONFIG` is also picked up.
@@ -87,6 +98,35 @@ KUBEVIEWER_IT=1 cargo test --release --manifest-path src-tauri/Cargo.toml --test
 
 Logging: `KUBEVIEWER_LOG=kube_viewer_lib=debug pnpm tauri:dev`.
 
+## Releasing
+
+The version lives in `src-tauri/Cargo.toml` only; `tauri.conf.json` inherits it. Release notes live in `CHANGELOG.md`.
+
+1. While you work, add your changes under `## Unreleased` in `CHANGELOG.md`.
+2. Cut the release:
+
+   ```sh
+   pnpm release 0.2.0                    # checks main is clean and in sync, bumps Cargo.toml/Cargo.lock,
+                                         # moves the notes under 0.2.0, commits, tags v0.2.0
+   git push --atomic origin main v0.2.0
+   ```
+
+The tag triggers `.github/workflows/release.yml`:
+
+1. It runs the full CI, including the kind integration tests.
+2. It builds a universal `.app` and `.dmg`, plus an updater archive signed with minisign.
+3. It verifies the code signature, both architectures and the updater signature against the public key in `tauri.conf.json`. It also checks that `latest.json` points at this release.
+4. It publishes the GitHub Release. Installed apps then see the update.
+
+A tag like `v0.2.0-beta.1` is published as a pre-release. The updater never offers pre-releases.
+
+### Secrets
+
+| Secret | Purpose |
+|---|---|
+| `TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Sign updater archives. The key file is `~/.tauri/kube-viewer.key`. Its password is in the login Keychain: `security find-generic-password -s tauri-updater-signing-key -w`. **Back both up.** If the key is lost, installed apps can never update again; users would have to reinstall a build carrying a new public key. |
+| `APPLE_CERTIFICATE` (base64 `.p12`), `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD` (app-specific), `APPLE_TEAM_ID` | Optional. Developer ID signing and notarization. Builds are ad-hoc signed until all six are set. |
+
 ## Not yet
 
 - Write actions (scale, restart, delete, edit)
@@ -94,4 +134,4 @@ Logging: `KUBEVIEWER_LOG=kube_viewer_lib=debug pnpm tauri:dev`.
 - Port-forward
 - CRDs
 - Metrics
-- Signed/notarized releases
+- Developer ID signing and notarization (the pipeline is ready; it needs an Apple Developer account)

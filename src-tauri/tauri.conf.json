@@ -1,7 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "KubeViewer",
-  "version": "0.1.0",
   "identifier": "dev.kubeviewer.app",
   "build": {
     "beforeDevCommand": "pnpm dev",
@@ -47,6 +46,14 @@
     "macOS": {
       "minimumSystemVersion": "12.0",
       "signingIdentity": "-"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDhGNjM0QUE2MzA1NzFDNDcKUldSSEhGY3dwa3BqanhvejNlUGRPL2tMdWtiZ2h6WFREZEtrUVlMc1UvMkViZzMwSGV0WXZDVVcK",
+      "endpoints": [
+        "https://github.com/NazarKalytiuk/kube-viewer/releases/latest/download/latest.json"
+      ]
     }
   }
 }

@@ -30,6 +30,13 @@ Tauri 2 + Rust (`src-tauri`) + Solid 1.9 + Tailwind 4 (`src`). macOS first. Read
 - **TLS:** never default `insecure_skip_tls_verify` to true.
 - **Errors** cross IPC as `{ code, message }` (`error.rs`). Map new failure modes to a code.
 
+- **Releases:**
+  - The version lives in `src-tauri/Cargo.toml` only. Do not add `version` to `tauri.conf.json` or `package.json`.
+  - User-facing changes go under `## Unreleased` in `CHANGELOG.md`. Those notes become the release notes and the updater's "What's new".
+  - `pnpm release X.Y.Z` tags the release, and pushing the tag publishes it (see README → Releasing).
+  - Never change `plugins.updater.pubkey` unless the signing key is deliberately rotated. Installed apps only accept updates signed by the matching key.
+  - Updater artifacts come only from `tauri.release.conf.json`, so local and CI builds need no key.
+
 ## Checks
 
 - `pnpm check` runs typecheck, vitest, rustfmt, clippy `-D warnings` and cargo tests.

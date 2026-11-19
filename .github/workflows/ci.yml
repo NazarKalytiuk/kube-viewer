@@ -4,6 +4,13 @@ on:
   push:
     branches: [main]
   pull_request:
+  # The release workflow runs the same checks before building.
+  workflow_call:
+    inputs:
+      release:
+        description: Called from the release workflow, which builds its own bundle
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -30,6 +37,7 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build
+      - run: shellcheck scripts/*.sh
       # Tauri renders with WKWebView on macOS, so e2e runs on WebKit.
       - run: pnpm exec playwright install --with-deps webkit
       - run: pnpm e2e
@@ -81,6 +89,7 @@ jobs:
 
   bundle:
     name: macOS bundle
+    if: ${{ !inputs.release }}
     runs-on: macos-15
     needs: [frontend, rust]
     steps:
@@ -97,12 +106,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm tauri build --bundles app
       - name: Verify bundle
-        run: |
-          APP=src-tauri/target/release/bundle/macos/KubeViewer.app
-          test -x "$APP/Contents/MacOS/kube-viewer"
-          codesign --verify --deep --strict "$APP"
-          # Only system frameworks may be linked: the app ships as a single binary.
-          ! otool -L "$APP/Contents/MacOS/kube-viewer" | tail -n +2 | grep -v -E '^\s*(/System/|/usr/lib/)'
+        run: scripts/verify-bundle.sh src-tauri/target/release/bundle
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: KubeViewer-macos
