@@ -43,7 +43,7 @@ serde-saphyr = "2.2"
 thiserror = "2"
 regex = "1.13"
 # Same version k8s-openapi uses for timestamps; used to parse/format log times.
-jiff = { version = "0.2.46", features = ["tz-system"] }
+jiff = { version = "1.0.0", features = ["tz-system"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
