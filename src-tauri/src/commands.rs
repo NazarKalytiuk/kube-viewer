@@ -37,6 +37,18 @@ pub struct AppState {
     pub subscriptions: Arc<Subscriptions>,
 }
 
+/// Runs work on a view or log store on the blocking pool. Tauri runs sync
+/// commands on the main thread, so waiting there for a store lock (held while
+/// a backlog streams in) or sorting / searching a large store froze the UI;
+/// such work must not stall the async runtime's workers either.
+async fn off_main<T: Send + 'static>(
+    work: impl FnOnce() -> AppResult<T> + Send + 'static,
+) -> AppResult<T> {
+    tokio::task::spawn_blocking(work)
+        .await
+        .map_err(|e| AppError::Internal(e.to_string()))?
+}
+
 fn sink<T: tauri::ipc::IpcResponse + Clone + Send + Sync + 'static>(
     channel: Channel<T>,
 ) -> Sink<T> {
@@ -144,20 +156,23 @@ pub struct QueryResult {
 }
 
 #[tauri::command]
-pub fn set_view_query(
+pub async fn set_view_query(
     state: State<'_, AppState>,
     id: u64,
     sort: SortSpec,
     filter: String,
 ) -> AppResult<QueryResult> {
     let view = state.subscriptions.view(id).ok_or_else(|| unknown(id))?;
-    let mut store = view.lock().expect("view store poisoned");
-    store.set_query(sort, &filter);
-    Ok(QueryResult {
-        version: store.version(),
-        total: store.total(),
-        sort: store.sort().clone(),
+    off_main(move || {
+        let mut store = view.lock().expect("view store poisoned");
+        store.set_query(sort, &filter);
+        Ok(QueryResult {
+            version: store.version(),
+            total: store.total(),
+            sort: store.sort().clone(),
+        })
     })
+    .await
 }
 
 #[derive(Serialize)]
@@ -170,7 +185,7 @@ pub struct RowsWindow {
 }
 
 #[tauri::command]
-pub fn get_rows(
+pub async fn get_rows(
     state: State<'_, AppState>,
     id: u64,
     start: usize,
@@ -182,19 +197,26 @@ pub fn get_rows(
         )));
     }
     let view = state.subscriptions.view(id).ok_or_else(|| unknown(id))?;
-    let store = view.lock().expect("view store poisoned");
-    Ok(RowsWindow {
-        version: store.version(),
-        total: store.total(),
-        start,
-        rows: store.window(start, end),
+    off_main(move || {
+        let store = view.lock().expect("view store poisoned");
+        Ok(RowsWindow {
+            version: store.version(),
+            total: store.total(),
+            start,
+            rows: store.window(start, end),
+        })
     })
+    .await
 }
 
 #[tauri::command]
-pub fn row_index(state: State<'_, AppState>, id: u64, uid: String) -> AppResult<Option<usize>> {
+pub async fn row_index(
+    state: State<'_, AppState>,
+    id: u64,
+    uid: String,
+) -> AppResult<Option<usize>> {
     let view = state.subscriptions.view(id).ok_or_else(|| unknown(id))?;
-    Ok(view.lock().expect("view store poisoned").index_of(&uid))
+    off_main(move || Ok(view.lock().expect("view store poisoned").index_of(&uid))).await
 }
 
 #[tauri::command]
@@ -283,19 +305,22 @@ pub struct LogQueryResult {
 }
 
 #[tauri::command]
-pub fn set_log_query(
+pub async fn set_log_query(
     state: State<'_, AppState>,
     id: u64,
     query: Option<LogQuery>,
 ) -> AppResult<LogQueryResult> {
     let store = log_session(&state, id)?.store;
-    let mut store = store.lock().expect("log store poisoned");
-    store.set_query(query.as_ref())?;
-    Ok(LogQueryResult {
-        version: store.version(),
-        visible: store.visible_count(),
-        matches: store.match_count(),
+    off_main(move || {
+        let mut store = store.lock().expect("log store poisoned");
+        store.set_query(query.as_ref())?;
+        Ok(LogQueryResult {
+            version: store.version(),
+            visible: store.visible_count(),
+            matches: store.match_count(),
+        })
     })
+    .await
 }
 
 #[derive(Serialize)]
@@ -321,7 +346,7 @@ pub struct LogWindow {
 }
 
 #[tauri::command]
-pub fn get_log_lines(
+pub async fn get_log_lines(
     state: State<'_, AppState>,
     id: u64,
     start: usize,
@@ -334,24 +359,27 @@ pub fn get_log_lines(
         )));
     }
     let store = log_session(&state, id)?.store;
-    let fmt = TimeFormatter::new(time_mode);
-    let store = store.lock().expect("log store poisoned");
-    let lines = store
-        .window(start, end)
-        .into_iter()
-        .map(|(n, line)| WireLogLine {
-            n,
-            ts: fmt.format(line.ts),
-            c: line.container,
-            text: line.text.to_string(),
+    off_main(move || {
+        let fmt = TimeFormatter::new(time_mode);
+        let store = store.lock().expect("log store poisoned");
+        let lines = store
+            .window(start, end)
+            .into_iter()
+            .map(|(n, line)| WireLogLine {
+                n,
+                ts: fmt.format(line.ts),
+                c: line.container,
+                text: line.text.to_string(),
+            })
+            .collect();
+        Ok(LogWindow {
+            version: store.version(),
+            total: store.visible_count(),
+            start,
+            lines,
         })
-        .collect();
-    Ok(LogWindow {
-        version: store.version(),
-        total: store.visible_count(),
-        start,
-        lines,
     })
+    .await
 }
 
 #[derive(Serialize)]
@@ -363,21 +391,24 @@ pub struct FindResult {
 }
 
 #[tauri::command]
-pub fn find_log_match(
+pub async fn find_log_match(
     state: State<'_, AppState>,
     id: u64,
     from: Option<usize>,
     forward: bool,
 ) -> AppResult<Option<FindResult>> {
     let store = log_session(&state, id)?.store;
-    let store = store.lock().expect("log store poisoned");
-    Ok(store
-        .find(from, forward)
-        .map(|(index, ordinal)| FindResult {
-            index,
-            ordinal,
-            matches: store.match_count(),
-        }))
+    off_main(move || {
+        let store = store.lock().expect("log store poisoned");
+        Ok(store
+            .find(from, forward)
+            .map(|(index, ordinal)| FindResult {
+                index,
+                ordinal,
+                matches: store.match_count(),
+            }))
+    })
+    .await
 }
 
 #[derive(Serialize)]
@@ -391,7 +422,7 @@ pub struct CopyResult {
 /// Rust so ranges far beyond what the virtualized list renders work, and the
 /// text matches the export format exactly.
 #[tauri::command]
-pub fn copy_log_lines(
+pub async fn copy_log_lines(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
     id: u64,
@@ -410,16 +441,17 @@ pub fn copy_log_lines(
         )));
     }
     let LogSession { store, containers } = log_session(&state, id)?;
-    let (text, lines) = {
+    let (text, lines) = off_main(move || {
         let store = store.lock().expect("log store poisoned");
-        crate::logs::render_range(
+        Ok(crate::logs::render_range(
             &store,
             start,
             end,
             &TimeFormatter::new(time_mode),
             &containers,
-        )
-    };
+        ))
+    })
+    .await?;
     let bytes = text.len();
     app.clipboard()
         .write_text(text)
@@ -436,7 +468,7 @@ pub async fn save_loaded_logs(
     container_prefix: bool,
 ) -> AppResult<SaveResult> {
     let LogSession { store, containers } = log_session(&state, id)?;
-    tokio::task::spawn_blocking(move || {
+    off_main(move || {
         save_loaded(
             &store,
             &containers,
@@ -446,7 +478,6 @@ pub async fn save_loaded_logs(
         )
     })
     .await
-    .map_err(|e| AppError::Internal(e.to_string()))?
 }
 
 #[tauri::command]

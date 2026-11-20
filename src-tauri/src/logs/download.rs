@@ -16,9 +16,10 @@ use kube::api::LogParams;
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt;
 
-use super::store::{LogLine, LogStore};
+use super::merge::Merge;
+use super::store::LogStore;
 use super::timefmt::{TimeFormatter, TimeMode};
-use super::{LineReader, format_export_line};
+use super::{LineReader, format_export_line, stream_interrupted};
 use crate::error::{AppError, AppResult, ErrorCode, ErrorInfo};
 use crate::view::Sink;
 
@@ -126,7 +127,7 @@ async fn download(
     let mut writer = tokio::io::BufWriter::with_capacity(WRITE_CHUNK, file);
 
     let mut readers = Vec::with_capacity(request.containers.len());
-    for container in &request.containers {
+    for (i, container) in request.containers.iter().enumerate() {
         let params = LogParams {
             container: Some(container.clone()),
             timestamps: true,
@@ -138,7 +139,7 @@ async fn download(
             info.message = format!("{container}: {}", info.message);
             info
         })?;
-        readers.push(LineReader::new(reader));
+        readers.push((i as u16, LineReader::new(reader)));
     }
 
     let fmt = TimeFormatter::new(request.time_mode);
@@ -147,17 +148,18 @@ async fn download(
     let mut out = String::with_capacity(WRITE_CHUNK);
     let mut last_progress = Instant::now();
 
-    // k-way merge: keep the next line of every container, always write the oldest.
-    let mut heads: Vec<Option<LogLine>> = Vec::with_capacity(readers.len());
-    for (i, reader) in readers.iter_mut().enumerate() {
-        heads.push(next_line(reader, i as u16, &request.containers).await?);
-    }
-    while let Some(i) = oldest(&heads) {
-        let line = heads[i].take().expect("oldest head exists");
-        let container = prefix.then(|| request.containers[i].as_str());
+    // A complete export: any interrupted stream fails it.
+    let mut merge = Merge::new(readers);
+    while let Some(next) = merge.next().await {
+        let line = next.map_err(|failed| {
+            stream_interrupted(
+                &request.containers[failed.container as usize],
+                &failed.error,
+            )
+        })?;
+        let container = prefix.then(|| request.containers[line.container as usize].as_str());
         format_export_line(&mut out, &fmt, &line, container);
         lines += 1;
-        heads[i] = next_line(&mut readers[i], i as u16, &request.containers).await?;
 
         if out.len() >= WRITE_CHUNK {
             bytes += out.len() as u64;
@@ -189,35 +191,6 @@ async fn download(
         .map_err(|e| io_error(&target, e))?;
     guard.0 = None;
     Ok((lines, bytes))
-}
-
-async fn next_line<R: futures::AsyncBufRead + Unpin>(
-    reader: &mut LineReader<R>,
-    index: u16,
-    containers: &[String],
-) -> Result<Option<LogLine>, ErrorInfo> {
-    match reader.next(index).await {
-        None => Ok(None),
-        Some(Ok(line)) => Ok(Some(line)),
-        Some(Err(err)) => Err(ErrorInfo {
-            code: ErrorCode::Api,
-            message: format!(
-                "{}: log stream interrupted: {err}",
-                containers[index as usize]
-            ),
-        }),
-    }
-}
-
-/// Index of the head with the smallest timestamp (ties: lowest index, so
-/// container order is stable).
-fn oldest(heads: &[Option<LogLine>]) -> Option<usize> {
-    heads
-        .iter()
-        .enumerate()
-        .filter_map(|(i, h)| h.as_ref().map(|l| (l.ts, i)))
-        .min()
-        .map(|(_, i)| i)
 }
 
 /// Writes the lines currently visible in a log view (respecting its filter).
@@ -280,7 +253,7 @@ pub fn save_loaded(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::logs::store::{LogQuery, QueryMode};
+    use crate::logs::store::{LogLine, LogQuery, QueryMode};
 
     fn line(ts: i64, container: u16, text: &str) -> LogLine {
         LogLine {
@@ -288,18 +261,6 @@ mod tests {
             container,
             text: text.into(),
         }
-    }
-
-    #[test]
-    fn oldest_picks_smallest_timestamp_with_stable_ties() {
-        let heads = vec![
-            Some(line(5, 0, "a")),
-            None,
-            Some(line(3, 2, "c")),
-            Some(line(3, 3, "d")),
-        ];
-        assert_eq!(oldest(&heads), Some(2));
-        assert_eq!(oldest(&[None, None]), None);
     }
 
     #[test]

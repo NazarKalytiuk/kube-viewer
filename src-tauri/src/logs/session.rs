@@ -12,9 +12,10 @@ use kube::Api;
 use kube::api::LogParams;
 use serde::{Deserialize, Serialize};
 
-use super::LineReader;
-use super::store::{LogLine, LogStore};
+use super::merge::Merge;
+use super::store::LogStore;
 use super::timefmt::{NO_TS, from_nanos};
+use super::{LineReader, stream_interrupted};
 use crate::error::{ErrorCode, ErrorInfo, kube_error_code};
 use crate::view::Sink;
 
@@ -149,39 +150,7 @@ async fn work(
 ) {
     // Anything logged after this instant is guaranteed to reach a follower.
     let started = Timestamp::now();
-
-    if request.containers.len() == 1 {
-        // Stream straight into the store so long histories show up progressively.
-        if let Err(error) = read_backlog(&api, &pod, &request, 0, |batch| {
-            store.lock().expect("log store poisoned").extend(batch)
-        })
-        .await
-        {
-            set_error(&shared, Some(error));
-        }
-    } else {
-        // Read all containers concurrently, then merge by time.
-        let results = join_all(request.containers.iter().enumerate().map(|(i, _)| {
-            let (api, pod, request) = (&api, &pod, &request);
-            async move {
-                let mut lines = Vec::new();
-                let result =
-                    read_backlog(api, pod, request, i as u16, |batch| lines.extend(batch)).await;
-                (lines, result)
-            }
-        }))
-        .await;
-        let mut merged: Vec<LogLine> = Vec::new();
-        for (lines, result) in results {
-            merged.extend(lines);
-            if let Err(error) = result {
-                set_error(&shared, Some(error));
-            }
-        }
-        // Stable sort: each container is already ordered; ties keep container order.
-        merged.sort_by_key(|l| l.ts);
-        store.lock().expect("log store poisoned").extend(merged);
-    }
+    read_backlog(&api, &pod, &request, &store, &shared).await;
 
     if !request.follow || request.previous {
         shared.lock().expect("log state poisoned").phase = LogPhase::Ended;
@@ -198,42 +167,50 @@ async fn work(
     shared.lock().expect("log state poisoned").phase = LogPhase::Ended;
 }
 
+/// Loads the history of every container into the store, merged by time.
+/// Lines are streamed in batches as they arrive, so long histories show up
+/// progressively and memory stays within the store's budget. A container
+/// whose log cannot be read is reported; the others still load.
 async fn read_backlog(
     api: &Api<Pod>,
     pod: &str,
     request: &LogRequest,
-    index: u16,
-    mut sink: impl FnMut(Vec<LogLine>),
-) -> Result<(), ErrorInfo> {
-    let container = &request.containers[index as usize];
-    let reader = api
-        .log_stream(pod, &params(request, container))
-        .await
-        .map_err(|e| container_error(container, &e))?;
-    let mut reader = LineReader::new(reader);
+    store: &Mutex<LogStore>,
+    shared: &Mutex<Shared>,
+) {
+    let opened = join_all(
+        request
+            .containers
+            .iter()
+            .map(|c| async move { api.log_stream(pod, &params(request, c)).await }),
+    )
+    .await;
+    let mut readers = Vec::with_capacity(opened.len());
+    for (i, (container, result)) in request.containers.iter().zip(opened).enumerate() {
+        match result {
+            Ok(reader) => readers.push((i as u16, LineReader::new(reader))),
+            Err(err) => set_error(shared, Some(container_error(container, &err))),
+        }
+    }
+
+    let mut merge = Merge::new(readers);
     let mut batch = Vec::with_capacity(PUSH_BATCH);
-    while let Some(line) = reader.next(index).await {
-        match line {
+    while let Some(next) = merge.next().await {
+        match next {
             Ok(line) => {
                 batch.push(line);
                 if batch.len() == PUSH_BATCH {
-                    sink(std::mem::replace(
-                        &mut batch,
-                        Vec::with_capacity(PUSH_BATCH),
-                    ));
+                    let full = std::mem::replace(&mut batch, Vec::with_capacity(PUSH_BATCH));
+                    store.lock().expect("log store poisoned").extend(full);
                 }
             }
-            Err(err) => {
-                sink(batch);
-                return Err(ErrorInfo {
-                    code: ErrorCode::Api,
-                    message: format!("{container}: log stream interrupted: {err}"),
-                });
+            Err(failed) => {
+                let container = &request.containers[failed.container as usize];
+                set_error(shared, Some(stream_interrupted(container, &failed.error)));
             }
         }
     }
-    sink(batch);
-    Ok(())
+    store.lock().expect("log store poisoned").extend(batch);
 }
 
 /// Follows one container forever: on every disconnect it resumes from the

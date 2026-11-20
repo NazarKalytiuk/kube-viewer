@@ -1,6 +1,7 @@
 //! Pod logs: live sessions backed by a Rust-side store, search, and export.
 
 pub mod download;
+pub mod merge;
 pub mod session;
 pub mod store;
 pub mod timefmt;
@@ -9,6 +10,8 @@ use futures::AsyncBufReadExt;
 
 use store::LogLine;
 use timefmt::{TimeFormatter, split_timestamp};
+
+use crate::error::{ErrorCode, ErrorInfo};
 
 /// Lines longer than this are truncated (single JSON log lines can be MBs).
 pub const MAX_LINE_BYTES: usize = 64 * 1024;
@@ -43,6 +46,14 @@ impl<R: futures::AsyncBufRead + Unpin> LineReader<R> {
             }
             Err(err) => Some(Err(err)),
         }
+    }
+}
+
+/// A container's log stream broke off while being read.
+pub fn stream_interrupted(container: &str, err: &std::io::Error) -> ErrorInfo {
+    ErrorInfo {
+        code: ErrorCode::Api,
+        message: format!("{container}: log stream interrupted: {err}"),
     }
 }
 
