@@ -1,0 +1,26 @@
+[
+  {
+    "name": "startup JS (main window)",
+    "path": "dist/assets/index-*.js",
+    "limit": "48 KB",
+    "gzip": true
+  },
+  {
+    "name": "YAML view JS (CodeMirror, loaded on demand)",
+    "path": "dist/assets/YamlView-*.js",
+    "limit": "120 KB",
+    "gzip": true
+  },
+  {
+    "name": "total JS",
+    "path": "dist/assets/*.js",
+    "limit": "165 KB",
+    "gzip": true
+  },
+  {
+    "name": "CSS",
+    "path": "dist/assets/*.css",
+    "limit": "6 KB",
+    "gzip": true
+  }
+]

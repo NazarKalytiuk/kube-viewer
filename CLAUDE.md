@@ -28,6 +28,7 @@ Tauri 2 + Rust (`src-tauri`) + Solid 1.9 + Tailwind 4 (`src`). macOS first. Read
 - **Solid gotcha:** `<Show>`/`<For>` children run once. Return JSX with `{expr}` holes, never a plain template string (it would never update).
 - **Secrets:** values must never appear in rows, detail, YAML or logs. Only `reveal_secret` returns them, on explicit user action.
 - **TLS:** never default `insecure_skip_tls_verify` to true.
+- **Plugin permissions:** `removeUnusedCommands` strips every plugin command not granted in `capabilities/default.json` from the binary. Using a new plugin API means granting its permission there.
 - **Errors** cross IPC as `{ code, message }` (`error.rs`). Map new failure modes to a code.
 
 - **Releases:**
@@ -41,6 +42,7 @@ Tauri 2 + Rust (`src-tauri`) + Solid 1.9 + Tailwind 4 (`src`). macOS first. Read
 
 - `pnpm check` runs typecheck, vitest, rustfmt, clippy `-D warnings` and cargo tests.
 - `pnpm e2e` runs Playwright on WebKit with a mocked backend (`tests/e2e/mockBackend.ts`).
+- CI also runs (after `pnpm build`) `pnpm size`, which holds the bundle budgets in `.size-limit.json`; `pnpm knip` (unused files, exports, dependencies) and `cargo machete src-tauri` (unused crates). A budget may only be raised deliberately.
 - Real-cluster tests need the `kind-kubeviewer-test` context:
 
   ```sh
