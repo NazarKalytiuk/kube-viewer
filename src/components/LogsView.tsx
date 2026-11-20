@@ -106,13 +106,9 @@ export function LogsView(props: LogsViewProps) {
   let scrollEl: HTMLDivElement | undefined;
   let searchInput: HTMLInputElement | undefined;
 
+  // Bound to a session once it is open (`attachCache`); empty until then.
   const cache = new WindowCache<LogLine>(
-    async (start, end) => {
-      const id = untrack(sessionId);
-      if (id === null) return { version: 0, total: 0, start, items: [] };
-      const w = await api.getLogLines(id, start, end, untrack(timeMode));
-      return { version: w.version, total: w.total, start: w.start, items: w.lines };
-    },
+    null,
     (t) => {
       setTotal(t);
       setRevision((r) => r + 1);
@@ -121,6 +117,13 @@ export function LogsView(props: LogsViewProps) {
     { overscan: 60 },
   );
   onCleanup(() => cache.dispose());
+
+  function attachCache(id: number) {
+    cache.setSource(async (start, end) => {
+      const w = await api.getLogLines(id, start, end, untrack(timeMode));
+      return { version: w.version, total: w.total, start: w.start, items: w.lines };
+    });
+  }
 
   // The query the backend currently has; find() must never run against a stale one.
   let appliedQuery: LogQuery | null = null;
@@ -172,7 +175,7 @@ export function LogsView(props: LogsViewProps) {
         setTotal(0);
         setAutoScroll(true);
       });
-      cache.reset();
+      cache.setSource(null);
       api
         .openLogs(
           {
@@ -200,7 +203,7 @@ export function LogsView(props: LogsViewProps) {
           });
           const q = untrack(query);
           if (q) await applyQuery(q);
-          cache.reset();
+          if (!disposed) attachCache(opened.id);
         })
         .catch((e) => !disposed && setOpenError(toAppError(e)));
       onCleanup(() => {
@@ -215,6 +218,8 @@ export function LogsView(props: LogsViewProps) {
     if (id === null) return;
     try {
       const result = await api.setLogQuery(id, q);
+      // The session was replaced meanwhile: this result describes a closed one.
+      if (untrack(sessionId) !== id) return;
       appliedQuery = q;
       batch(() => {
         setLineSel(null);
@@ -225,7 +230,7 @@ export function LogsView(props: LogsViewProps) {
       });
       cache.invalidate(result.version);
     } catch (e) {
-      setQueryError(toAppError(e).message);
+      if (untrack(sessionId) === id) setQueryError(toAppError(e).message);
     }
   }
 

@@ -2,7 +2,11 @@ import { expect, test, type Page } from "@playwright/test";
 import { installMockBackend } from "./mockBackend";
 
 test.beforeEach(async ({ page }) => {
-  await page.addInitScript(() => window.localStorage.clear());
+  await page.addInitScript(() => {
+    window.localStorage.clear();
+    // Full history, so the whole mocked log is loaded.
+    window.localStorage.setItem("kubeviewer:logPrefs", JSON.stringify({ history: "all" }));
+  });
   await page.addInitScript(installMockBackend, { podCount: 100, logLines: 50_000 });
   await page.goto("/");
   await page.locator('[role="row"][aria-rowindex]').first().click();
@@ -13,6 +17,42 @@ test.beforeEach(async ({ page }) => {
 const logLines = (page: Page) => page.locator("[data-line]");
 const lastCall = (page: Page, cmd: string) =>
   page.evaluate((c) => [...(window as any).__KV_MOCK__.calls].reverse().find((x: any) => x.cmd === c)?.args, cmd);
+
+test("switching history replaces the lines and settles", async ({ page }) => {
+  const fetches = () => page.evaluate(() => (window as any).__KV_MOCK__.calls.filter((c: any) => c.cmd === "get_log_lines").length);
+  const settled = async () => {
+    const before = await fetches();
+    await page.waitForTimeout(300);
+    expect(await fetches()).toBe(before);
+  };
+  const history = page.getByLabel("History");
+  // Focus the viewer, not the select (arrow keys would change the choice).
+  const toTop = async () => {
+    await logLines(page).last().click();
+    await page.keyboard.press("Meta+ArrowUp");
+  };
+  // Live lines push the current session's version above the next session's.
+  await page.evaluate(() => (window as any).__KV_MOCK__.appendLogs(5));
+  await expect(logLines(page).last()).toContainText("app live 4");
+
+  await history.selectOption("tail100");
+  await expect(page.getByText(/^100 lines/)).toBeVisible();
+  await expect(logLines(page).last()).toContainText("app line 49999");
+  await toTop();
+  await expect(logLines(page).first()).toContainText("app line 49900");
+  await settled();
+
+  await history.selectOption("all");
+  await expect(page.getByText(/50,000 lines/)).toBeVisible();
+  await expect(logLines(page).last()).toContainText("app line 49999");
+  await settled();
+
+  await history.selectOption("tail1000");
+  await expect(page.getByText(/^1,000 lines/)).toBeVisible();
+  await toTop();
+  await expect(logLines(page).first()).toContainText("app line 49000");
+  await settled();
+});
 
 test("opens at the newest line with a bounded DOM", async ({ page }) => {
   await expect(logLines(page).last()).toContainText("app line 49999");

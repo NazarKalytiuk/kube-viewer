@@ -5,6 +5,10 @@
 // window plus overscan. Requests are coalesced: at most one is in flight and
 // the latest wanted range/version wins, so fast scrolling or a burst of
 // updates never queues up stale IPC calls.
+//
+// Versions are only comparable within one source (a backend view or log
+// session). Switching sources goes through `setSource`, which forgets every
+// version seen so far and ignores responses still in flight from the old one.
 
 export interface Window<T> {
   version: number;
@@ -24,6 +28,8 @@ export interface WindowCacheOptions {
 
 export class WindowCache<T> {
   private rows = new Map<number, T>();
+  /** Bumped whenever cached data becomes meaningless; older responses are dropped. */
+  private generation = 0;
   private cachedVersion = -1;
   private wantedVersion = 0;
   private visible = { start: 0, end: 0 };
@@ -33,8 +39,9 @@ export class WindowCache<T> {
   private readonly overscan: number;
   private readonly maxCached: number;
 
+  /** `source` may be `null` until the backend view exists (see `setSource`). */
   constructor(
-    private readonly fetch: WindowFetcher<T>,
+    private source: WindowFetcher<T> | null,
     private readonly onChange: (total: number) => void,
     private readonly onError: (error: unknown) => void = () => {},
     options: WindowCacheOptions = {},
@@ -53,8 +60,19 @@ export class WindowCache<T> {
     if (this.needsFetch()) void this.run();
   }
 
-  /** Called when the backend reports a new data version. */
+  /**
+   * Switches to another backend source, or to none. Nothing carries over:
+   * the new source's versions are unrelated to the old one's.
+   */
+  setSource(source: WindowFetcher<T> | null) {
+    this.source = source;
+    this.wantedVersion = 0;
+    this.reset();
+  }
+
+  /** Called when the backend reports a new data version of the current source. */
   invalidate(version: number) {
+    if (!this.source) return;
     if (version <= this.cachedVersion && version <= this.wantedVersion) return;
     this.wantedVersion = Math.max(this.wantedVersion, version);
     void this.run();
@@ -62,6 +80,7 @@ export class WindowCache<T> {
 
   /** Drops everything and refetches (e.g. when the item formatting changed). */
   reset() {
+    this.generation += 1;
     this.rows = new Map();
     this.cachedVersion = -1;
     void this.run();
@@ -73,6 +92,7 @@ export class WindowCache<T> {
   }
 
   private needsFetch(): boolean {
+    if (!this.source) return false;
     if (this.cachedVersion < this.wantedVersion) return true;
     for (let i = this.visible.start; i < this.visible.end; i++) {
       if (!this.rows.has(i)) return true;
@@ -89,16 +109,24 @@ export class WindowCache<T> {
     try {
       do {
         this.rerun = false;
+        const source = this.source;
+        if (!source) return;
+        const generation = this.generation;
         const start = Math.max(0, this.visible.start - this.overscan);
         const end = Math.max(start, this.visible.end + this.overscan);
         let result: Window<T>;
         try {
-          result = await this.fetch(start, Math.min(end, start + 1000));
+          result = await source(start, Math.min(end, start + 1000));
         } catch (error) {
-          if (!this.disposed) this.onError(error);
+          if (this.disposed) return;
+          // A failure of a source we already left (e.g. a closed session) is moot.
+          if (generation !== this.generation) continue;
+          this.onError(error);
           return;
         }
         if (this.disposed) return;
+        // Fetched before a reset or source switch: refetch instead.
+        if (generation !== this.generation) continue;
         this.apply(result);
       } while (this.rerun || this.needsFetch());
     } finally {

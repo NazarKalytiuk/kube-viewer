@@ -31,12 +31,9 @@ export function ResourceView(props: { context: string; kind: ResourceKind; names
   let disposed = false;
   let filterTimer: number | undefined;
 
+  // Bound to the backend view once it is open; empty until then.
   const rows = new WindowCache<Row>(
-    async (start, end) => {
-      if (viewId === null) return { version: 0, total: 0, start, items: [] };
-      const w = await api.getRows(viewId, start, end);
-      return { version: w.version, total: w.total, start: w.start, items: w.rows };
-    },
+    null,
     (t) => {
       setTotal(t);
       setRevision((r) => r + 1);
@@ -61,6 +58,11 @@ export function ResourceView(props: { context: string; kind: ResourceKind; names
       }
       sub = opened;
       viewId = opened.id;
+      const id = opened.id;
+      rows.setSource(async (start, end) => {
+        const w = await api.getRows(id, start, end);
+        return { version: w.version, total: w.total, start: w.start, items: w.rows };
+      });
       setColumns(opened.columns);
       setSort(opened.sort);
     } catch (error) {

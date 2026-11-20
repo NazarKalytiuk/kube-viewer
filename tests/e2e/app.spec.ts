@@ -48,7 +48,8 @@ test("opens details, YAML and logs for a pod", async ({ page }) => {
   await expect(page.locator(".cm-content")).toContainText("name: pod-000002");
 
   await page.getByRole("tab", { name: "logs" }).click();
-  await expect(page.getByText(/50,000 lines/)).toBeVisible();
+  // Default history: the last 1,000 lines.
+  await expect(page.getByText(/^1,000 lines/)).toBeVisible();
 
   await page.getByRole("button", { name: "Close details" }).click();
   await expect(page.getByRole("tab", { name: "status" })).toHaveCount(0);

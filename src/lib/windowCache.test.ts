@@ -106,6 +106,105 @@ describe("WindowCache", () => {
     expect(w.get(0)?.name).toBe("row-0-v1");
   });
 
+  it("does not fetch without a source and ignores versions meanwhile", async () => {
+    const b = backend(100);
+    const w = new WindowCache<Row>(null, () => {}, undefined, { overscan: 0 });
+    w.setVisible(0, 10);
+    w.invalidate(42);
+    w.reset();
+    expect(b.calls).toHaveLength(0);
+    w.setSource(b.fetch);
+    expect(b.calls).toHaveLength(1);
+    b.calls[0]!.resolve();
+    await flush();
+    expect(w.get(0)?.name).toBe("row-0-v1");
+    expect(b.calls).toHaveLength(1);
+  });
+
+  it("forgets the old source's versions when switching to a newer, smaller one", async () => {
+    // e.g. "Everything" (version 5000) replaced by "Last 100 lines" (version 1).
+    const old = backend(10_000);
+    for (let i = 0; i < 4999; i++) old.bump();
+    const w = new WindowCache<Row>(old.fetch, () => {}, undefined, { overscan: 0 });
+    w.setVisible(0, 10);
+    old.calls[0]!.resolve();
+    await flush();
+    expect(w.get(0)?.name).toBe("row-0-v5000");
+
+    const next = backend(100);
+    w.setSource(next.fetch);
+    next.calls[0]!.resolve();
+    await flush();
+    expect(w.get(0)?.name).toBe("row-0-v1");
+    await flush();
+    // Settled: no fetch loop chasing the old source's version.
+    expect(next.calls).toHaveLength(1);
+    w.invalidate(next.bump());
+    expect(next.calls).toHaveLength(2);
+  });
+
+  it("drops a response from the previous source that arrives after the switch", async () => {
+    const old = backend(1000);
+    for (let i = 0; i < 99; i++) old.bump();
+    const w = new WindowCache<Row>(old.fetch, () => {}, undefined, { overscan: 0 });
+    w.setVisible(0, 10);
+    const next = backend(1000);
+    w.setSource(next.fetch);
+    // The old request (version 100) was still in flight.
+    old.calls[0]!.resolve();
+    await flush();
+    expect(w.get(0)).toBeUndefined();
+    expect(next.calls).toHaveLength(1);
+    next.calls[0]!.resolve();
+    await flush();
+    expect(w.get(0)?.name).toBe("row-0-v1");
+    // A later update of the new source is not mistaken for stale.
+    w.invalidate(next.bump());
+    next.calls[1]!.resolve();
+    await flush();
+    expect(w.get(0)?.name).toBe("row-0-v2");
+  });
+
+  it("ignores errors of a source it already left", async () => {
+    const errors: unknown[] = [];
+    let reject: (e: unknown) => void = () => {};
+    const closed = () => new Promise<Window<Row>>((_, r) => (reject = r));
+    const w = new WindowCache<Row>(closed, () => {}, (e) => errors.push(e), { overscan: 0 });
+    w.setVisible(0, 10);
+    const next = backend(100);
+    w.setSource(next.fetch);
+    reject({ code: "invalid_request", message: "unknown log view 1" });
+    await flush();
+    expect(errors).toEqual([]);
+    next.calls[0]!.resolve();
+    await flush();
+    expect(w.get(0)?.name).toBe("row-0-v1");
+  });
+
+  it("reset discards a response fetched before it", async () => {
+    let format = "a";
+    const calls: (() => void)[] = [];
+    const fetch = (start: number, end: number) =>
+      new Promise<Window<Row>>((resolve) => {
+        const f = format;
+        calls.push(() => {
+          const items: Row[] = [];
+          for (let i = start; i < end; i++) items.push({ ...makeRow(i, 1), name: `${f}${i}` });
+          resolve({ version: 1, total: 100, start, items });
+        });
+      });
+    const w = new WindowCache<Row>(fetch, () => {}, undefined, { overscan: 0 });
+    w.setVisible(0, 10);
+    format = "b";
+    w.reset();
+    calls[0]!();
+    await flush();
+    expect(w.get(0)).toBeUndefined();
+    calls[1]!();
+    await flush();
+    expect(w.get(0)?.name).toBe("b0");
+  });
+
   it("reports fetch errors and stops", async () => {
     const errors: unknown[] = [];
     const w = new WindowCache<Row>(() => Promise.reject({ code: "invalid_request", message: "unknown view" }), () => {}, (e) => errors.push(e));

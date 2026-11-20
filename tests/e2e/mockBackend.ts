@@ -71,6 +71,13 @@ export function installMockBackend(options: MockOptions) {
     const all = s.lines.map((line, i) => ({ line, n: i + 1 }));
     return s.query?.mode === "filter" ? all.filter((x) => s.query!.re.test(x.line.text)) : all;
   }
+  // Like the backend: a closed session's id is unknown.
+  function logSession(id: number): LogSession {
+    const s = logSessions.get(id);
+    if (!s) throw { code: "invalid_request", message: `unknown log view ${id}` };
+    return s;
+  }
+
   function sendLogStatus(s: LogSession) {
     send(s.channel, {
       version: s.version,
@@ -161,9 +168,11 @@ export function installMockBackend(options: MockOptions) {
     open_logs: ({ request, onStatus }) => {
       const containers: string[] = request.containers;
       const count = options.logLines ?? 50_000;
+      // Like `tailLines`: the newest lines of each container.
+      const first = request.tailLines == null ? 0 : Math.max(0, count - request.tailLines);
       const base = Date.UTC(2026, 10, 19, 10, 0, 0);
       const lines: MockLine[] = [];
-      for (let i = 0; i < count; i++) {
+      for (let i = first; i < count; i++) {
         containers.forEach((_, c) => {
           const level =
             i % 1000 === 0
@@ -177,13 +186,14 @@ export function installMockBackend(options: MockOptions) {
         });
       }
       const id = nextSub++;
-      const session: LogSession = { lines, query: null, channel: onStatus, version: 1, containers };
+      // Like `LogStore`: every stored line bumps the version.
+      const session: LogSession = { lines, query: null, channel: onStatus, version: lines.length, containers };
       logSessions.set(id, session);
       sendLogStatus(session);
       return { id, containers };
     },
     set_log_query: ({ id, query }) => {
-      const s = logSessions.get(id)!;
+      const s = logSession(id);
       if (query) {
         let re: RegExp;
         try {
@@ -200,7 +210,7 @@ export function installMockBackend(options: MockOptions) {
       return { version: s.version, visible: v.length, matches: matches(s).length };
     },
     get_log_lines: ({ id, start, end, timeMode }) => {
-      const s = logSessions.get(id)!;
+      const s = logSession(id);
       const v = visibleLines(s);
       const lines = v.slice(start, end).map(({ line, n }) => ({
         n,
@@ -211,7 +221,7 @@ export function installMockBackend(options: MockOptions) {
       return { version: s.version, total: v.length, start, lines };
     },
     find_log_match: ({ id, from, forward }) => {
-      const s = logSessions.get(id)!;
+      const s = logSession(id);
       const v = visibleLines(s);
       const idx = v.map((x, i) => (s.query && s.query.re.test(x.line.text) ? i : -1)).filter((i) => i >= 0);
       if (!idx.length) return null;
@@ -253,17 +263,18 @@ export function installMockBackend(options: MockOptions) {
       return id;
     },
     copy_log_lines: ({ id, start, end }) => {
-      const s = logSessions.get(id)!;
+      const s = logSession(id);
       const v = visibleLines(s).slice(Math.min(start, end), Math.max(start, end) + 1);
       return { lines: v.length, bytes: v.reduce((n, x) => n + x.line.text.length + 1, 0) };
     },
     save_loaded_logs: ({ id, path }) => {
-      const s = logSessions.get(id)!;
+      const s = logSession(id);
       const n = visibleLines(s).length;
       return { path, lines: n, bytes: n * 40 };
     },
     close_subscription: ({ id }) => {
       views.delete(id);
+      logSessions.delete(id);
       return null;
     },
     reveal_secret: () => ({}),
@@ -293,7 +304,7 @@ export function installMockBackend(options: MockOptions) {
       for (const s of logSessions.values()) {
         const last = s.lines[s.lines.length - 1]?.ms ?? Date.now();
         for (let i = 0; i < count; i++) s.lines.push({ ms: last + (i + 1) * 10, c: 0, text: `${s.containers[0]} live ${i}` });
-        s.version++;
+        s.version += count;
         sendLogStatus(s);
       }
     },

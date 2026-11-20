@@ -5,6 +5,8 @@ Each release section becomes the GitHub Release notes and the "What’s new" tex
 
 ## Unreleased
 
+- Fixed: switching log history (for example from “Last 1,000 lines” to “Last 24 hours” or “Everything” and back) no longer freezes the logs view or keeps showing the previous lines.
+
 ## 0.1.0 — 2026-11-19
 
 First public release.
