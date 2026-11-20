@@ -5,6 +5,8 @@ Each release section becomes the GitHub Release notes and the "What’s new" tex
 
 ## Unreleased
 
+## 0.1.1 — 2026-11-20
+
 - Fixed: switching log history (for example from “Last 1,000 lines” to “Last 24 hours” or “Everything” and back) no longer freezes the logs view or keeps showing the previous lines.
 - “All containers” logs now appear progressively while the history loads, and stay within the memory budget even with “Everything”.
 - Searching, filtering and scrolling large logs and tables no longer block the window while data is loading.
