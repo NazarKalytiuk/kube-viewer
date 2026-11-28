@@ -213,3 +213,87 @@ describe("WindowCache", () => {
     expect(errors).toEqual([{ code: "invalid_request", message: "unknown view" }]);
   });
 });
+
+/** Fake log session: rows are appended, every append bumps the version. */
+function growing(total: number) {
+  let version = 1;
+  const calls: ({ start: number; end: number } | { tail: number })[] = [];
+  const respond = (start: number, end: number) =>
+    Promise.resolve<Window<Row>>({ version, total, start, items: Array.from({ length: Math.max(0, end - start) }, (_, i) => makeRow(start + i, version)) });
+  return {
+    calls,
+    range: (start: number, end: number) => {
+      calls.push({ start, end });
+      return respond(start, Math.min(end, total));
+    },
+    tail: (count: number) => {
+      calls.push({ tail: count });
+      return respond(Math.max(0, total - count), total);
+    },
+    append(n: number) {
+      total += n;
+      version += 1;
+      return version;
+    },
+  };
+}
+
+describe("WindowCache following the end", () => {
+  it("reports a grown total only together with the items at its end", async () => {
+    const b = growing(100);
+    const totals: number[] = [];
+    const w = new WindowCache<Row>(null, (t) => totals.push(t), undefined, { overscan: 5 });
+    w.setFollow(true);
+    w.setSource(b.range, b.tail);
+    await flush();
+    expect(b.calls).toEqual([{ tail: 10 }]);
+    expect(totals).toEqual([100]);
+
+    w.setVisible(90, 100);
+    w.invalidate(b.append(500));
+    await flush();
+    expect(b.calls[1]).toEqual({ tail: 20 });
+    expect(totals).toEqual([100, 600]);
+    for (let i = 590; i < 600; i++) expect(w.get(i)?.name).toBe(`row-${i}-v2`);
+  });
+
+  it("fetches nothing for a visible range left behind by the grown end", async () => {
+    const b = growing(100);
+    const w = new WindowCache<Row>(null, () => {}, undefined, { overscan: 5 });
+    w.setFollow(true);
+    w.setSource(b.range, b.tail);
+    w.setVisible(90, 100);
+    w.invalidate(b.append(500));
+    await flush();
+    const calls = b.calls.length;
+    // The view still shows the old end until it scrolls to the new one.
+    w.setVisible(90, 100);
+    w.setVisible(590, 600);
+    await flush();
+    expect(b.calls).toHaveLength(calls);
+  });
+
+  it("fetches visible ranges again once it stops following", async () => {
+    const b = growing(1000);
+    const w = new WindowCache<Row>(null, () => {}, undefined, { overscan: 0 });
+    w.setFollow(true);
+    w.setSource(b.range, b.tail);
+    w.setVisible(990, 1000);
+    await flush();
+    w.setFollow(false);
+    w.setVisible(100, 110);
+    await flush();
+    expect(b.calls.at(-1)).toEqual({ start: 100, end: 110 });
+    expect(w.get(100)).toBeDefined();
+  });
+
+  it("fetches ranges when the source has no tail", async () => {
+    const b = growing(100);
+    const w = new WindowCache<Row>(b.range, () => {}, undefined, { overscan: 0 });
+    w.setFollow(true);
+    w.setVisible(0, 10);
+    await flush();
+    expect(b.calls.every((c) => "start" in c)).toBe(true);
+    expect(b.calls.at(-1)).toEqual({ start: 0, end: 10 });
+  });
+});

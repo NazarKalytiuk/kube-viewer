@@ -5,6 +5,9 @@ Each release section becomes the GitHub Release notes and the "What’s new" tex
 
 ## Unreleased
 
+- Fixed: logs no longer flicker while opening or when you change how much history is loaded. Lines no longer flash empty while the history streams in or new lines arrive.
+- Fixed: filtering or sorting a table no longer briefly shows the previous rows before the new results.
+
 ## 0.1.1 — 2026-11-20
 
 - Fixed: switching log history (for example from “Last 1,000 lines” to “Last 24 hours” or “Everything” and back) no longer freezes the logs view or keeps showing the previous lines.

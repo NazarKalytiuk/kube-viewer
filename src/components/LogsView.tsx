@@ -4,7 +4,7 @@ import { createVirtualizer } from "@tanstack/solid-virtual";
 import { For, Show, batch, createEffect, createMemo, createSignal, on, onCleanup, untrack } from "solid-js";
 import { api, toAppError, type Subscription } from "../lib/api";
 import { searchRegExp, segmentLine } from "../lib/logText";
-import type { AppError, ContainerRef, LogLine, LogQuery, LogStatus, TimeMode } from "../lib/types";
+import type { AppError, ContainerRef, LineWindow, LogLine, LogQuery, LogStatus, TimeMode } from "../lib/types";
 import { WindowCache } from "../lib/windowCache";
 import { DownloadPanel } from "./DownloadPanel";
 import { ErrorNotice } from "./ErrorNotice";
@@ -107,6 +107,8 @@ export function LogsView(props: LogsViewProps) {
   let searchInput: HTMLInputElement | undefined;
 
   // Bound to a session once it is open (`attachCache`); empty until then.
+  // `total` (the virtualizer's count) only ever comes from it, together with
+  // the lines it covers, so no row appears before its content.
   const cache = new WindowCache<LogLine>(
     null,
     (t) => {
@@ -119,10 +121,14 @@ export function LogsView(props: LogsViewProps) {
   onCleanup(() => cache.dispose());
 
   function attachCache(id: number) {
-    cache.setSource(async (start, end) => {
-      const w = await api.getLogLines(id, start, end, untrack(timeMode));
+    const fetch = async (window: LineWindow) => {
+      const w = await api.getLogLines(id, window, untrack(timeMode));
       return { version: w.version, total: w.total, start: w.start, items: w.lines };
-    });
+    };
+    cache.setSource(
+      (start, end) => fetch({ kind: "range", start, end }),
+      (count) => fetch({ kind: "tail", count }),
+    );
   }
 
   // The query the backend currently has; find() must never run against a stale one.
@@ -152,6 +158,9 @@ export function LogsView(props: LogsViewProps) {
     const last = items[items.length - 1];
     cache.setVisible(first?.index ?? 0, last ? last.index + 1 : 0);
   });
+
+  // While auto-scrolling, the end is what is shown: fetch it with each new total.
+  createEffect(() => cache.setFollow(autoScroll()));
 
   // Row heights change with wrapping; drop measurements when it toggles.
   createEffect(on(wrap, () => virtualizer.measure(), { defer: true }));
@@ -187,7 +196,6 @@ export function LogsView(props: LogsViewProps) {
           (s) => {
             if (disposed) return;
             setStatus(s);
-            setTotal(s.visible);
             cache.invalidate(s.version);
           },
         )
@@ -225,7 +233,6 @@ export function LogsView(props: LogsViewProps) {
         setLineSel(null);
         setQueryError(null);
         setCurrent(null);
-        setTotal(result.visible);
         setStatus((s) => (s ? { ...s, matches: result.matches, visible: result.visible } : s));
       });
       cache.invalidate(result.version);
@@ -272,9 +279,11 @@ export function LogsView(props: LogsViewProps) {
     }
   }
 
-  // Keep the newest line in view while auto-scroll is on.
+  // Keep the newest line in view while auto-scroll is on: when lines arrive,
+  // and when row heights change (wrapping).
   createEffect(
-    on(total, (n) => {
+    on(virtualizer.getTotalSize, () => {
+      const n = untrack(total);
       if (untrack(autoScroll) && n > 0) virtualizer.scrollToIndex(n - 1, { align: "end" });
     }),
   );
@@ -484,7 +493,7 @@ export function LogsView(props: LogsViewProps) {
           <Show when={status()} fallback={phaseLabel()}>
             {(s) => (
               <>
-                {total().toLocaleString()}
+                {s().visible.toLocaleString()}
                 <Show when={filtering()}> of {s().lines.toLocaleString()}</Show> lines
                 <Show when={s().dropped > 0}>
                   <span title="Older lines were dropped from memory. Download gets the full log.">
@@ -701,7 +710,7 @@ export function LogsView(props: LogsViewProps) {
               }}
             </For>
           </div>
-          <Show when={status() && total() === 0 && status()!.phase !== "loading"}>
+          <Show when={status() && status()!.visible === 0 && total() === 0 && status()!.phase !== "loading"}>
             <div class="pointer-events-none absolute inset-0 flex items-center justify-center text-muted">
               {filtering() ? "No matching lines" : "No log lines yet"}
             </div>

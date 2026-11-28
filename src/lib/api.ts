@@ -11,6 +11,7 @@ import type {
   DownloadRequest,
   FindResult,
   KindInfo,
+  LineWindow,
   LogOpened,
   LogQuery,
   LogQueryResult,
@@ -98,8 +99,8 @@ export const api = {
 
   setLogQuery: (id: number, query: LogQuery | null) => invoke<LogQueryResult>("set_log_query", { id, query }),
 
-  getLogLines: (id: number, start: number, end: number, timeMode: TimeMode) =>
-    invoke<LogWindow>("get_log_lines", { id, start, end, timeMode }),
+  getLogLines: (id: number, window: LineWindow, timeMode: TimeMode) =>
+    invoke<LogWindow>("get_log_lines", { id, window, timeMode }),
 
   findLogMatch: (id: number, from: number | null, forward: boolean) =>
     invoke<FindResult | null>("find_log_match", { id, from, forward }),

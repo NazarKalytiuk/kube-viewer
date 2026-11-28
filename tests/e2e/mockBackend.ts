@@ -20,9 +20,20 @@ export function installMockBackend(options: MockOptions) {
   const channelIndex = new Map<number, number>();
   const views = new Map<number, View>();
   type MockLine = { ms: number; c: number; text: string };
-  type LogSession = { lines: MockLine[]; query: { re: RegExp; mode: string } | null; channel: { id: number }; version: number; containers: string[] };
+  type LogSession = {
+    lines: MockLine[];
+    query: { re: RegExp; mode: string } | null;
+    channel: { id: number };
+    version: number;
+    containers: string[];
+    phase: "loading" | "following";
+  };
   const logSessions = new Map<number, LogSession>();
   const calls: { cmd: string; args: Record<string, any> }[] = [];
+  /** Delay of every command, like a real IPC round trip (off by default). */
+  let latencyMs = 0;
+  /** Like `read_backlog`: history arrives in `chunks` batches, `intervalMs` apart. */
+  let backlog = { chunks: 1, intervalMs: 0 };
   let nextSub = 1;
   const now = Math.floor(Date.now() / 1000);
 
@@ -85,7 +96,7 @@ export function installMockBackend(options: MockOptions) {
       lines: s.lines.length,
       dropped: 0,
       matches: matches(s).length,
-      phase: "following",
+      phase: s.phase,
       error: null,
     });
   }
@@ -187,9 +198,19 @@ export function installMockBackend(options: MockOptions) {
       }
       const id = nextSub++;
       // Like `LogStore`: every stored line bumps the version.
-      const session: LogSession = { lines, query: null, channel: onStatus, version: lines.length, containers };
+      const session: LogSession = { lines: [], query: null, channel: onStatus, version: 0, containers, phase: "loading" };
       logSessions.set(id, session);
-      sendLogStatus(session);
+      const size = Math.ceil(lines.length / backlog.chunks);
+      const push = (from: number) => {
+        if (logSessions.get(id) !== session) return;
+        const chunk = lines.slice(from, from + size);
+        for (const line of chunk) session.lines.push(line);
+        session.version += chunk.length;
+        if (from + size >= lines.length) session.phase = "following";
+        sendLogStatus(session);
+        if (session.phase === "loading") setTimeout(() => push(from + size), backlog.intervalMs);
+      };
+      push(0);
       return { id, containers };
     },
     set_log_query: ({ id, query }) => {
@@ -209,9 +230,11 @@ export function installMockBackend(options: MockOptions) {
       const v = visibleLines(s);
       return { version: s.version, visible: v.length, matches: matches(s).length };
     },
-    get_log_lines: ({ id, start, end, timeMode }) => {
+    get_log_lines: ({ id, window, timeMode }) => {
       const s = logSession(id);
       const v = visibleLines(s);
+      const start = window.kind === "tail" ? Math.max(0, v.length - window.count) : window.start;
+      const end = window.kind === "tail" ? v.length : window.end;
       const lines = v.slice(start, end).map(({ line, n }) => ({
         n,
         c: line.c,
@@ -291,6 +314,7 @@ export function installMockBackend(options: MockOptions) {
     },
     async invoke(cmd: string, args: Record<string, any> = {}) {
       calls.push({ cmd, args });
+      if (latencyMs > 0) await new Promise((r) => setTimeout(r, latencyMs));
       const handler = handlers[cmd];
       if (!handler) throw { code: "internal", message: `mock: unknown command ${cmd}` };
       return handler(args);
@@ -299,6 +323,14 @@ export function installMockBackend(options: MockOptions) {
   (window as any).__KV_MOCK__ = {
     views,
     calls,
+    /** Delays every command by `ms` from now on. */
+    setLatency(ms: number) {
+      latencyMs = ms;
+    },
+    /** Log sessions opened from now on load their history in `chunks` batches. */
+    streamBacklog(chunks: number, intervalMs: number) {
+      backlog = { chunks, intervalMs };
+    },
     /** Appends live lines to every open log session. */
     appendLogs(count: number) {
       for (const s of logSessions.values()) {

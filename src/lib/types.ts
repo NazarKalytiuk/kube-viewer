@@ -220,6 +220,9 @@ export interface LogLine {
   text: string;
 }
 
+/** Lines `[start, end)`, or the newest `count` lines (see `get_log_lines`). */
+export type LineWindow = { kind: "range"; start: number; end: number } | { kind: "tail"; count: number };
+
 export interface LogWindow {
   version: number;
   total: number;

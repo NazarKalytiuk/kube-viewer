@@ -15,9 +15,12 @@ export function ResourceView(props: { context: string; kind: ResourceKind; names
   const [columns, setColumns] = createSignal<Column[]>([]);
   const [sort, setSort] = createSignal<SortSpec>({ column: "name", descending: false });
   const [update, setUpdate] = createSignal<ViewUpdate | null>(null);
-  // Counts come from two sources (watch updates and query results); keep
-  // them in signals of their own so the header always shows the latest.
+  // Header counts come from two sources (watch updates and query results);
+  // keep them in signals of their own so the header always shows the latest.
   const [total, setTotal] = createSignal(0);
+  // The table's row count comes only from the cache, together with the rows
+  // it covers, so a filter or sort never shows old rows under a new count.
+  const [rowCount, setRowCount] = createSignal(0);
   const [unfiltered, setUnfiltered] = createSignal(0);
   const [revision, setRevision] = createSignal(0);
   const [openError, setOpenError] = createSignal<AppError | null>(null);
@@ -35,7 +38,7 @@ export function ResourceView(props: { context: string; kind: ResourceKind; names
   const rows = new WindowCache<Row>(
     null,
     (t) => {
-      setTotal(t);
+      setRowCount(t);
       setRevision((r) => r + 1);
     },
     (error) => setOpenError(toAppError(error)),
@@ -153,7 +156,7 @@ export function ResourceView(props: { context: string; kind: ResourceKind; names
           <Show when={columns().length}>
             <ResourceTable
               columns={columns()}
-              total={total()}
+              total={rowCount()}
               revision={revision()}
               rows={rows}
               sort={sort()}

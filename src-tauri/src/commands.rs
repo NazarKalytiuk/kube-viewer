@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use futures::FutureExt;
 use k8s_openapi::api::core::v1::{Pod, Secret};
 use kube::Api;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::State;
 use tauri::ipc::Channel;
 
@@ -345,23 +345,45 @@ pub struct LogWindow {
     lines: Vec<WireLogLine>,
 }
 
+/// Which visible lines `get_log_lines` returns.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum LineWindow {
+    /// Lines `[start, end)`.
+    Range { start: usize, end: usize },
+    /// The newest `count` lines. They are located under the same lock that
+    /// reads them, so a view following the end gets its new total together
+    /// with the lines it ends at.
+    Tail { count: usize },
+}
+
 #[tauri::command]
 pub async fn get_log_lines(
     state: State<'_, AppState>,
     id: u64,
-    start: usize,
-    end: usize,
+    window: LineWindow,
     time_mode: TimeMode,
 ) -> AppResult<LogWindow> {
-    if end < start || end - start > MAX_WINDOW {
+    let too_large = match window {
+        LineWindow::Range { start, end } => end < start || end - start > MAX_WINDOW,
+        LineWindow::Tail { count } => count > MAX_WINDOW,
+    };
+    if too_large {
         return Err(AppError::InvalidRequest(format!(
-            "window [{start}, {end}) exceeds {MAX_WINDOW} lines"
+            "log window {window:?} exceeds {MAX_WINDOW} lines"
         )));
     }
     let store = log_session(&state, id)?.store;
     off_main(move || {
         let fmt = TimeFormatter::new(time_mode);
         let store = store.lock().expect("log store poisoned");
+        let (start, end) = match window {
+            LineWindow::Range { start, end } => (start, end),
+            LineWindow::Tail { count } => {
+                let tail = store.tail(count);
+                (tail.start, tail.end)
+            }
+        };
         let lines = store
             .window(start, end)
             .into_iter()
