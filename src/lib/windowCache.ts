@@ -9,6 +9,9 @@
 // Versions are only comparable within one source (a backend view or log
 // session). Switching sources goes through `setSource`, which forgets every
 // version seen so far and ignores responses still in flight from the old one.
+//
+// The total reported through `onChange` always comes with the items of the
+// same response, so a view sized by it never shows a row before its data.
 
 export interface Window<T> {
   version: number;
@@ -18,6 +21,11 @@ export interface Window<T> {
 }
 
 export type WindowFetcher<T> = (start: number, end: number) => Promise<Window<T>>;
+/** Fetches the last `count` items; the response's `start` says where they begin. */
+export type TailFetcher<T> = (count: number) => Promise<Window<T>>;
+
+/** The backend caps a request at this many items. */
+const MAX_REQUEST = 1000;
 
 export interface WindowCacheOptions {
   /** Extra rows fetched on each side of the visible range. */
@@ -33,6 +41,10 @@ export class WindowCache<T> {
   private cachedVersion = -1;
   private wantedVersion = 0;
   private visible = { start: 0, end: 0 };
+  /** Total of the latest applied response. */
+  private total = 0;
+  private tail: TailFetcher<T> | null = null;
+  private following = false;
   private inflight = false;
   private rerun = false;
   private disposed = false;
@@ -62,12 +74,28 @@ export class WindowCache<T> {
 
   /**
    * Switches to another backend source, or to none. Nothing carries over:
-   * the new source's versions are unrelated to the old one's.
+   * the new source's versions are unrelated to the old one's. A `tail`
+   * fetcher of the same source enables `setFollow`.
    */
-  setSource(source: WindowFetcher<T> | null) {
+  setSource(source: WindowFetcher<T> | null, tail: TailFetcher<T> | null = null) {
     this.source = source;
+    this.tail = tail;
     this.wantedVersion = 0;
+    this.total = 0;
     this.reset();
+  }
+
+  /**
+   * While following, the view keeps the end of the list in sight, so every
+   * fetch asks for the last items. A growing total then arrives together with
+   * the items at its new end: the view can scroll there with nothing left to
+   * load. Visible ranges elsewhere are only transient (the view is about to
+   * scroll to the end) and fetch nothing. Needs a tail fetcher.
+   */
+  setFollow(on: boolean) {
+    if (this.following === on) return;
+    this.following = on;
+    if (this.needsFetch()) void this.run();
   }
 
   /** Called when the backend reports a new data version of the current source. */
@@ -91,13 +119,36 @@ export class WindowCache<T> {
     this.rows.clear();
   }
 
+  private followsTail(): boolean {
+    return this.following && this.tail !== null;
+  }
+
+  /** Items that must be cached: the visible ones, or as many at the end while following. */
+  private wanted(): { start: number; end: number } {
+    if (!this.followsTail()) return this.visible;
+    const length = this.visible.end - this.visible.start;
+    return { start: Math.max(0, this.total - length), end: this.total };
+  }
+
   private needsFetch(): boolean {
     if (!this.source) return false;
     if (this.cachedVersion < this.wantedVersion) return true;
-    for (let i = this.visible.start; i < this.visible.end; i++) {
+    const { start, end } = this.wanted();
+    for (let i = start; i < end; i++) {
       if (!this.rows.has(i)) return true;
     }
     return false;
+  }
+
+  private fetch(source: WindowFetcher<T>): Promise<Window<T>> {
+    const tail = this.following ? this.tail : null;
+    if (tail) {
+      const count = this.visible.end - this.visible.start + 2 * this.overscan;
+      return tail(Math.min(count, MAX_REQUEST));
+    }
+    const start = Math.max(0, this.visible.start - this.overscan);
+    const end = Math.max(start, this.visible.end + this.overscan);
+    return source(start, Math.min(end, start + MAX_REQUEST));
   }
 
   private async run() {
@@ -112,11 +163,9 @@ export class WindowCache<T> {
         const source = this.source;
         if (!source) return;
         const generation = this.generation;
-        const start = Math.max(0, this.visible.start - this.overscan);
-        const end = Math.max(start, this.visible.end + this.overscan);
         let result: Window<T>;
         try {
-          result = await source(start, Math.min(end, start + 1000));
+          result = await this.fetch(source);
         } catch (error) {
           if (this.disposed) return;
           // A failure of a source we already left (e.g. a closed session) is moot.
@@ -142,13 +191,15 @@ export class WindowCache<T> {
       this.cachedVersion = result.version;
     }
     this.wantedVersion = Math.max(this.wantedVersion, result.version);
+    this.total = result.total;
     result.items.forEach((item, i) => this.rows.set(result.start + i, item));
     // Drop rows beyond the total (deletions) and far-away rows (memory bound).
     for (const index of this.rows.keys()) {
       if (index >= result.total) this.rows.delete(index);
     }
     if (this.rows.size > this.maxCached) {
-      const center = (this.visible.start + this.visible.end) / 2;
+      const { start, end } = this.wanted();
+      const center = (start + end) / 2;
       const keep = [...this.rows.keys()].sort((a, b) => Math.abs(a - center) - Math.abs(b - center)).slice(0, this.maxCached);
       const kept = new Map<number, T>();
       for (const index of keep) kept.set(index, this.rows.get(index)!);

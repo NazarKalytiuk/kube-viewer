@@ -38,6 +38,28 @@ test("filters and sorts on the backend", async ({ page }) => {
   await expect(rows(page).first()).toContainText("pod-000019");
 });
 
+test("filtering never shows the previous rows under the new count", async ({ page }) => {
+  await expect(rows(page).first()).toContainText("pod-000000");
+  await page.evaluate(() => {
+    const w = window as any;
+    w.__KV_MOCK__.setLatency(30);
+    // Count painted frames with the filtered row count but rows that don't match.
+    w.__staleFrames = 0;
+    const sample = () => {
+      const shown = [...document.querySelectorAll('[role="row"][aria-rowindex]')];
+      if (shown.length > 0 && shown.length <= 10 && shown.some((r) => !r.textContent?.includes("pod-00001"))) w.__staleFrames++;
+      requestAnimationFrame(sample);
+    };
+    requestAnimationFrame(sample);
+  });
+
+  await page.getByLabel("Filter").first().fill("pod-00001");
+  await expect(page.getByText("10 of 100,000")).toBeVisible();
+  await expect(rows(page)).toHaveCount(10);
+  await expect(rows(page).first()).toContainText("pod-000010");
+  expect(await page.evaluate(() => (window as any).__staleFrames as number)).toBe(0);
+});
+
 test("opens details, YAML and logs for a pod", async ({ page }) => {
   await rows(page).nth(2).click();
   await expect(page.getByRole("button", { name: "Close details" })).toBeVisible();

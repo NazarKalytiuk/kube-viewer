@@ -15,6 +15,19 @@ test.beforeEach(async ({ page }) => {
 });
 
 const logLines = (page: Page) => page.locator("[data-line]");
+/** Starts counting painted frames that show a line still waiting for its content. */
+async function watchPlaceholders(page: Page) {
+  await page.evaluate(() => {
+    const w = window as any;
+    w.__placeholderFrames = 0;
+    const sample = () => {
+      if (document.querySelector('[aria-label="Log lines"] [data-index]:not([data-line])')) w.__placeholderFrames++;
+      requestAnimationFrame(sample);
+    };
+    requestAnimationFrame(sample);
+  });
+  return () => page.evaluate(() => (window as any).__placeholderFrames as number);
+}
 const lastCall = (page: Page, cmd: string) =>
   page.evaluate((c) => [...(window as any).__KV_MOCK__.calls].reverse().find((x: any) => x.cmd === c)?.args, cmd);
 
@@ -52,6 +65,27 @@ test("switching history replaces the lines and settles", async ({ page }) => {
   await toTop();
   await expect(logLines(page).first()).toContainText("app line 49000");
   await settled();
+});
+
+test("lines never blink while history streams in on open or history switch", async ({ page }) => {
+  // Like the real backend: history arrives in batches, every call takes a while.
+  await page.evaluate(() => {
+    (window as any).__KV_MOCK__.setLatency(15);
+    (window as any).__KV_MOCK__.streamBacklog(8, 40);
+  });
+  const placeholderFrames = await watchPlaceholders(page);
+
+  // Reopen the viewer.
+  await page.getByRole("tab", { name: "status" }).click();
+  await page.getByRole("tab", { name: "logs" }).click();
+  await expect(page.getByText(/50,000 lines · live/)).toBeVisible();
+  await expect(logLines(page).last()).toContainText("app line 49999");
+
+  await page.getByLabel("History").selectOption("tail10000");
+  await expect(page.getByText(/^10,000 lines · live/)).toBeVisible();
+  await expect(logLines(page).last()).toContainText("app line 49999");
+
+  expect(await placeholderFrames()).toBe(0);
 });
 
 test("opens at the newest line with a bounded DOM", async ({ page }) => {

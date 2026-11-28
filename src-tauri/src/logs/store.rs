@@ -216,6 +216,12 @@ impl LogStore {
     }
 
     /// Visible lines `[start, end)` with their line numbers.
+    /// Visible index range of the newest `count` visible lines.
+    pub fn tail(&self, count: usize) -> std::ops::Range<usize> {
+        let end = self.visible_count();
+        end.saturating_sub(count)..end
+    }
+
     pub fn window(&self, start: usize, end: usize) -> Vec<(u64, &LogLine)> {
         let end = end.min(self.visible_count());
         let start = start.min(end);
@@ -311,6 +317,23 @@ mod tests {
             case_sensitive: false,
             mode,
         }
+    }
+
+    #[test]
+    fn tail_is_the_newest_visible_lines() {
+        let mut s = LogStore::default();
+        assert_eq!(s.tail(10), 0..0);
+        s.extend(["INFO a", "ERROR b", "info c", "error d"].map(line));
+        assert_eq!(s.tail(2), 2..4);
+        assert_eq!(s.tail(10), 0..4);
+        s.set_query(Some(&query("error", QueryMode::Filter)))
+            .unwrap();
+        assert_eq!(s.tail(1), 1..2);
+        let tail = s.tail(1);
+        assert_eq!(
+            texts(&s, tail.start, tail.end),
+            [(4, "error d".to_string())]
+        );
     }
 
     #[test]
